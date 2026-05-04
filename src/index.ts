@@ -1439,7 +1439,7 @@ registerTool(
 
 registerTool(
   'get_hf_daily_papers',
-  'Hugging Face Daily Papers: editor-curated AI/ML papers from huggingface.co/papers, layered with community upvotes and discussion counts. Different signal from get_arxiv_recent (firehose) and get_ai_papers_trending (citation-ranked all-time): this is editor picks of-the-day with engagement signal. Each paper carries paperId, title, summary, authors, upvotes, num_comments, hf_url, arxiv_url (when applicable), github_repo, github_stars, ai_keywords. Refreshed daily at 14:30 UTC. Titles sanitized at capture time. Free, no auth.',
+  'Hugging Face Daily Papers: editor-curated AI/ML papers from huggingface.co/papers, layered with community upvotes and discussion counts. Different signal from get_arxiv_recent (firehose) and get_ai_papers_trending (citation-ranked all-time): this is editor picks of-the-day with engagement signal. Each paper carries paperId, title, summary, authors, upvotes, num_comments, hf_url, arxiv_url (when applicable), github_repo, github_stars, ai_keywords. Refreshed daily at 14:15 UTC. Titles sanitized at capture time. Free, no auth.',
   {
     limit: z.number().min(1).max(30).optional().describe('Max papers to render (default 15, max 30)'),
   },
