@@ -1268,6 +1268,52 @@ registerTool(
   },
 );
 
+// ── Tool: get_hot_issues (free) ─────────────────────────────────────
+
+registerTool(
+  'get_hot_issues',
+  'Currently-hot GitHub issues across the AI ecosystem. Five fan-out search queries on AI-relevant topics (llm, ai-agents, large-language-models, machine-learning, transformer) for is:issue is:open archived:false comments>=10 updated within the last 7 days. Deduped by URL, top 30 by comment count. Each issue carries url, repo, number, title, author, state, comments, reactions_total, labels, created_at, updated_at, and matched_topic. Refreshed daily at 12:30 UTC. Companion to get_trending_repos: that shows which AI repos are gaining stars, this shows where the active conversations are. Free, no auth.',
+  {
+    limit: z.number().min(1).max(30).optional().describe('Max issues to render (default 15, max 30)'),
+  },
+  async ({ limit }) => {
+    const data = (await fetchJSON('/issues/hot')) as {
+      snapshot: {
+        date: string;
+        capturedAt: string;
+        total_issues: number;
+        topics_queried: string[];
+        recent_window_days: number;
+        comments_threshold: number;
+        issues: { url: string; repo: string; title: string; author: string | null; state: 'open' | 'closed'; comments: number; reactions_total: number; matched_topic: string; updated_at: string }[];
+        summary: { by_topic: Record<string, number>; top_repos: { repo: string; count: number }[] };
+      };
+    };
+    const s = data.snapshot;
+    const cap = Math.min(limit ?? 15, s.issues.length);
+    const lines = s.issues.slice(0, cap).map((i, n) => {
+      const meta = `${i.comments} comments, ${i.reactions_total} reactions  [${i.matched_topic}]`;
+      const author = i.author ? ` by ${i.author}` : '';
+      const updated = i.updated_at ? `  updated ${i.updated_at.slice(0, 10)}` : '';
+      return `${n + 1}. ${i.repo}: ${i.title}\n     ${meta}${updated}${author}\n     ${i.url}`;
+    }).join('\n\n');
+    const repos = s.summary.top_repos.slice(0, 5).map(r => `${r.repo} (${r.count})`).join(', ');
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text:
+            `Hot AI GitHub issues. ${s.date}, showing ${cap} of ${s.total_issues}.\n` +
+            `Window: last ${s.recent_window_days} days, comments threshold ${s.comments_threshold}.\n` +
+            (repos ? `Most-active repos: ${repos}\n\n` : '\n') +
+            lines +
+            `\n\nSource: GitHub Search API. Captured ${s.capturedAt}.`,
+        },
+      ],
+    };
+  },
+);
+
 // ── Start ───────────────────────────────────────────────────────────
 
 async function main() {

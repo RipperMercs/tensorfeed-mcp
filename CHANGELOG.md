@@ -2,6 +2,13 @@
 
 All notable changes to the [TensorFeed.ai MCP server](https://github.com/RipperMercs/tensorfeed-mcp). Free tools work without configuration; premium tools require a bearer token via the `TENSORFEED_TOKEN` env var. Buy credits at [tensorfeed.ai/developers/agent-payments](https://tensorfeed.ai/developers/agent-payments).
 
+## 1.14.0 - 2026-05-04
+
+### Added
+- `get_hot_issues` tool. Currently-hot GitHub issues across the AI ecosystem, ranked by comment count. Five fan-out search queries on AI topics (llm, ai-agents, large-language-models, machine-learning, transformer), filtered to is:issue is:open archived:false comments>=10 with activity in the last 7 days, deduped, top 30. Optional `limit` arg for the rendered list. Free.
+
+Companion to `get_trending_repos`: that surfaces repos gaining stars, this surfaces repos where the active conversations are happening.
+
 ## 1.13.0 - 2026-05-04
 
 ### Added
