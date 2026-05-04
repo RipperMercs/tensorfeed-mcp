@@ -1285,7 +1285,7 @@ registerTool(
 
 registerTool(
   'get_hot_issues',
-  'Currently-hot GitHub issues across the AI ecosystem. Five fan-out search queries on AI-relevant topics (llm, ai-agents, large-language-models, machine-learning, transformer) for is:issue is:open archived:false comments>=10 updated within the last 7 days. Deduped by URL, top 30 by comment count. Each issue carries url, repo, number, title, author, state, comments, reactions_total, labels, created_at, updated_at, and matched_topic. Refreshed daily at 12:30 UTC. Companion to get_trending_repos: that shows which AI repos are gaining stars, this shows where the active conversations are. Free, no auth.',
+  'Currently-hot GitHub issues across the AI ecosystem. Five fan-out keyword-phrase searches ("large language model", "AI agent", transformer, "machine learning", LLM) for is:issue is:open archived:false comments>=10 updated within the last 7 days. Deduped by URL, top 30 by comment count. Each issue carries url, repo, number, title, author, state, comments, reactions_total, labels, created_at, updated_at, and matched_topic (the keyword phrase that found it). Refreshed daily at 12:30 UTC. Companion to get_trending_repos: that shows which AI repos are gaining stars, this shows where the active conversations are. Free, no auth.',
   {
     limit: z.number().min(1).max(30).optional().describe('Max issues to render (default 15, max 30)'),
   },
