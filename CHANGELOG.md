@@ -2,6 +2,11 @@
 
 All notable changes to the [TensorFeed.ai MCP server](https://github.com/RipperMercs/tensorfeed-mcp). Free tools work without configuration; premium tools require a bearer token via the `TENSORFEED_TOKEN` env var. Buy credits at [tensorfeed.ai/developers/agent-payments](https://tensorfeed.ai/developers/agent-payments).
 
+## 1.17.0 - 2026-05-04
+
+### Added
+- `get_openrouter_models` tool. OpenRouter cross-provider model catalog (200+ models across 50+ inference providers) with comparable per-token pricing, context window, modality, and provider metadata. Optional `namespace` filter, `free_only` flag for free-tier models, `cheapest` sort by ascending input price, and `limit` for the rendered list. Companion to `get_model_pricing` (curated frontier-lab catalog) by surfacing the long tail of OSS models on cloud inference. Free.
+
 ## 1.16.0 - 2026-05-04
 
 ### Added

@@ -1374,6 +1374,67 @@ registerTool(
   },
 );
 
+// ── Tool: get_openrouter_models (free) ──────────────────────────────
+
+registerTool(
+  'get_openrouter_models',
+  'OpenRouter cross-provider model catalog (200+ models normalized across 50+ inference providers). Each entry has per-token pricing (prompt + completion + image + request), context window, modality (e.g. text+image->text), instruct_type, tokenizer, top provider metadata (max_completion_tokens, moderation flag), and supported_parameters. Use this to find the long tail of OSS models on cloud inference, including the cheapest model for a given workload, the model with the largest context window, or the free-tier set. Pairs with get_model_pricing (curated frontier-lab catalog). Refreshed daily at 14:00 UTC. Free, no auth.',
+  {
+    namespace: z.string().optional().describe('Optional filter to a single provider namespace (e.g. "anthropic", "openai", "meta-llama"). Case-insensitive.'),
+    free_only: z.boolean().optional().describe('If true, return only models with prompt+completion both 0 (free-tier).'),
+    cheapest: z.boolean().optional().describe('If true, sort by cheapest input price ascending. Free-tier models excluded from this sort.'),
+    limit: z.number().min(1).max(50).optional().describe('Max models to render (default 20, max 50)'),
+  },
+  async ({ namespace, free_only, cheapest, limit }) => {
+    const data = (await fetchJSON('/openrouter/models')) as {
+      snapshot: {
+        date: string;
+        capturedAt: string;
+        total_models: number;
+        models: { id: string; name: string; context_length: number | null; modality: string | null; pricing: { prompt: number | null; completion: number | null; image: number | null; request: number | null } }[];
+        summary: { by_namespace: { namespace: string; count: number }[]; cheapest_input: { id: string; usd_per_million: number } | null; cheapest_output: { id: string; usd_per_million: number } | null; largest_context: { id: string; tokens: number } | null; free_tier_count: number };
+      };
+    };
+    const s = data.snapshot;
+    const ns = namespace?.trim().toLowerCase();
+    let list = s.models;
+    if (ns) list = list.filter(m => m.id.toLowerCase().startsWith(ns + '/'));
+    if (free_only) list = list.filter(m => m.pricing.prompt === 0 && m.pricing.completion === 0);
+    if (cheapest) {
+      list = list
+        .filter(m => typeof m.pricing.prompt === 'number' && m.pricing.prompt > 0)
+        .sort((a, b) => (a.pricing.prompt ?? 0) - (b.pricing.prompt ?? 0));
+    }
+
+    const cap = Math.min(limit ?? 20, list.length);
+    const fmtPrice = (p: number | null) =>
+      p === null ? '?' : p === 0 ? 'free' : `$${(p * 1_000_000).toFixed(2)}/Mtok`;
+    const fmtCtx = (c: number | null) =>
+      c === null ? 'unknown' : c >= 1_000_000 ? `${(c / 1_000_000).toFixed(0)}M` : `${(c / 1_000).toFixed(0)}K`;
+
+    const lines = list.slice(0, cap).map((m, i) => {
+      const modality = m.modality ? ` ${m.modality}` : '';
+      return `${i + 1}. ${m.id}${modality}\n     in ${fmtPrice(m.pricing.prompt)}, out ${fmtPrice(m.pricing.completion)}, ctx ${fmtCtx(m.context_length)}`;
+    }).join('\n\n');
+
+    const namespaces = s.summary.by_namespace.slice(0, 5).map(n => `${n.namespace} (${n.count})`).join(', ');
+    let header = `OpenRouter catalog. ${s.date}. ${s.total_models} models total, ${list.length} after filters, showing ${cap}.\n`;
+    header += `Top provider namespaces: ${namespaces}\n`;
+    if (s.summary.cheapest_input) header += `Cheapest input (paid): ${s.summary.cheapest_input.id} at $${s.summary.cheapest_input.usd_per_million.toFixed(2)}/Mtok\n`;
+    if (s.summary.largest_context) header += `Largest context: ${s.summary.largest_context.id} at ${fmtCtx(s.summary.largest_context.tokens)} tokens\n`;
+    header += `Free-tier models available: ${s.summary.free_tier_count}\n`;
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: header + '\n' + (lines || '  (no models match the filters)') + `\n\nSource: openrouter.ai. Captured ${s.capturedAt}.`,
+        },
+      ],
+    };
+  },
+);
+
 // ── Start ───────────────────────────────────────────────────────────
 
 async function main() {
