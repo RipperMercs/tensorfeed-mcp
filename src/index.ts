@@ -1141,6 +1141,133 @@ registerTool(
   },
 );
 
+// ── Tool: get_ai_papers_trending (free) ─────────────────────────────
+
+registerTool(
+  'get_ai_papers_trending',
+  'Daily curated AI/ML research papers ranked by citation count. Sourced from Semantic Scholar across five fan-out queries (large language model, transformer, RLHF, AI agents, diffusion model), deduped by paperId, top 30 returned. Each paper carries title, abstract, authors, year, venue, citation count, arxivId, doi, and fields of study. Refreshed daily at 11:00 UTC. Use this when an agent wants the citation-ranked top of the AI research literature. Free, no auth.',
+  {},
+  async () => {
+    const data = (await fetchJSON('/papers/ai-trending')) as {
+      snapshot: {
+        date: string;
+        capturedAt: string;
+        total_papers: number;
+        papers: { title: string; year: number | null; venue: string | null; citationCount: number; authors: string[]; arxivId: string | null; url: string | null }[];
+        summary: { top_venues: { venue: string; count: number }[] };
+      };
+    };
+    const s = data.snapshot;
+    const lines = s.papers.map((p, i) => {
+      const authors = p.authors.slice(0, 3).join(', ') + (p.authors.length > 3 ? ' et al.' : '');
+      const year = p.year ? ` (${p.year})` : '';
+      const venue = p.venue ? ` ${p.venue}.` : '';
+      const arxiv = p.arxivId ? ` arXiv:${p.arxivId}` : '';
+      const link = p.url ? `\n     ${p.url}` : '';
+      return `${i + 1}. ${p.title}${year}\n     ${authors}.${venue} Citations: ${p.citationCount}.${arxiv}${link}`;
+    }).join('\n\n');
+    const venues = s.summary.top_venues.slice(0, 5).map(v => `${v.venue} (${v.count})`).join(', ');
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text:
+            `AI Papers, citation-ranked. ${s.date}, ${s.total_papers} papers.\n` +
+            (venues ? `Top venues: ${venues}\n\n` : '\n') +
+            lines +
+            `\n\nSource: Semantic Scholar Graph API. Captured ${s.capturedAt}.`,
+        },
+      ],
+    };
+  },
+);
+
+// ── Tool: get_arxiv_recent (free) ───────────────────────────────────
+
+registerTool(
+  'get_arxiv_recent',
+  'Most recent arXiv submissions in cs.AI / cs.LG / cs.CL / cs.CV. Single Atom API call, deduped by arxivId, top 50 by submission date. The firehose pair to get_ai_papers_trending: this shows what just dropped, ai_papers_trending ranks by citation count. Each paper carries arxivId, title, abstract, authors, primary category, publication date, html and pdf URLs. Refreshed daily at 11:30 UTC. Free, no auth.',
+  {
+    limit: z.number().min(1).max(50).optional().describe('Max papers to include in the rendered list (default 25, max 50)'),
+  },
+  async ({ limit }) => {
+    const data = (await fetchJSON('/papers/arxiv-recent')) as {
+      snapshot: {
+        date: string;
+        capturedAt: string;
+        total_papers: number;
+        categories_queried: string[];
+        papers: { arxivId: string; title: string; authors: string[]; primaryCategory: string | null; publishedAt: string; htmlUrl: string }[];
+      };
+    };
+    const s = data.snapshot;
+    const cap = Math.min(limit ?? 25, s.papers.length);
+    const lines = s.papers.slice(0, cap).map((p, i) => {
+      const authors = p.authors.slice(0, 3).join(', ') + (p.authors.length > 3 ? ' et al.' : '');
+      const cat = p.primaryCategory ? ` [${p.primaryCategory}]` : '';
+      const date = p.publishedAt ? ` ${p.publishedAt.slice(0, 10)}` : '';
+      return `${i + 1}. ${p.title}${cat}${date}\n     ${authors}\n     ${p.htmlUrl}`;
+    }).join('\n\n');
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text:
+            `arXiv recent submissions. ${s.date}, showing ${cap} of ${s.total_papers}.\n` +
+            `Categories: ${s.categories_queried.join(', ')}\n\n` +
+            lines +
+            `\n\nSource: arxiv.org. Captured ${s.capturedAt}.`,
+        },
+      ],
+    };
+  },
+);
+
+// ── Tool: get_hf_trending (free) ────────────────────────────────────
+
+registerTool(
+  'get_hf_trending',
+  'Top 30 most-downloaded models and top 30 most-downloaded datasets on Hugging Face. Captured daily at 12:00 UTC against the public HF API (no auth). Each entry carries id, downloads, likes, pipeline_tag (models), tags, lastModified, private, gated. Use this when an agent wants the current shape of the open model/dataset ecosystem. Once enough daily snapshots accumulate, day-over-day download deltas become a real trending signal. Free, no auth.',
+  {
+    section: z.enum(['models', 'datasets', 'both']).optional().describe('Which to include in the rendered output (default both)'),
+    limit: z.number().min(1).max(30).optional().describe('Max items per section (default 15, max 30)'),
+  },
+  async ({ section, limit }) => {
+    const data = (await fetchJSON('/hf/trending')) as {
+      snapshot: {
+        date: string;
+        capturedAt: string;
+        models: { items: { id: string; downloads: number; likes: number; pipeline_tag: string | null }[] };
+        datasets: { items: { id: string; downloads: number; likes: number }[] };
+        summary: { top_pipeline_tags: { tag: string; count: number }[]; top_namespaces: { namespace: string; count: number }[] };
+      };
+    };
+    const s = data.snapshot;
+    const sec = section ?? 'both';
+    const n = Math.min(limit ?? 15, 30);
+    const fmtCount = (x: number) => x >= 1_000_000 ? `${(x / 1_000_000).toFixed(1)}M` : x >= 1_000 ? `${(x / 1_000).toFixed(1)}K` : String(x);
+
+    const modelLines = s.models.items.slice(0, n).map((m, i) => {
+      const tag = m.pipeline_tag ? ` [${m.pipeline_tag}]` : '';
+      return `${i + 1}. ${m.id}${tag}  ${fmtCount(m.downloads)} downloads, ${fmtCount(m.likes)} likes`;
+    }).join('\n');
+    const datasetLines = s.datasets.items.slice(0, n).map((d, i) =>
+      `${i + 1}. ${d.id}  ${fmtCount(d.downloads)} downloads, ${fmtCount(d.likes)} likes`,
+    ).join('\n');
+
+    const pipelines = s.summary.top_pipeline_tags.slice(0, 5).map(t => `${t.tag} (${t.count})`).join(', ');
+    const namespaces = s.summary.top_namespaces.slice(0, 5).map(n => `${n.namespace} (${n.count})`).join(', ');
+
+    let text = `Hugging Face top-downloaded. ${s.date}.\n`;
+    if (pipelines) text += `Top pipeline tags (models): ${pipelines}\n`;
+    if (namespaces) text += `Top namespaces: ${namespaces}\n`;
+    if (sec === 'models' || sec === 'both') text += `\nModels:\n${modelLines}\n`;
+    if (sec === 'datasets' || sec === 'both') text += `\nDatasets:\n${datasetLines}\n`;
+    text += `\nSource: huggingface.co. Captured ${s.capturedAt}.`;
+    return { content: [{ type: 'text' as const, text }] };
+  },
+);
+
 // ── Start ───────────────────────────────────────────────────────────
 
 async function main() {

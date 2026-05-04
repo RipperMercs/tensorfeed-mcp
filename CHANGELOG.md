@@ -2,6 +2,15 @@
 
 All notable changes to the [TensorFeed.ai MCP server](https://github.com/RipperMercs/tensorfeed-mcp). Free tools work without configuration; premium tools require a bearer token via the `TENSORFEED_TOKEN` env var. Buy credits at [tensorfeed.ai/developers/agent-payments](https://tensorfeed.ai/developers/agent-payments).
 
+## 1.13.0 - 2026-05-04
+
+### Added
+- `get_ai_papers_trending` tool. Daily curated AI/ML research papers ranked by citation count, sourced from Semantic Scholar. Five fan-out queries (LLM, transformer, RLHF, AI agents, diffusion), deduped, top 30. Free.
+- `get_arxiv_recent` tool. Most recent arXiv submissions in cs.AI / cs.LG / cs.CL / cs.CV, top 50 by submission date. Optional `limit` arg for the rendered list. Free.
+- `get_hf_trending` tool. Top 30 most-downloaded models and datasets on Hugging Face. Optional `section` (models / datasets / both) and `limit` args. Free.
+
+All three are backed by the worker endpoints shipped in the same monorepo commit and pass through the 1.12.0 output sanitizer automatically.
+
 ## 1.12.0 - 2026-05-04
 
 ### Added
