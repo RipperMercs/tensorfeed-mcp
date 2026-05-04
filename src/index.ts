@@ -1327,6 +1327,53 @@ registerTool(
   },
 );
 
+// ── Tool: get_reddit_trending (free) ────────────────────────────────
+
+registerTool(
+  'get_reddit_trending',
+  'Currently-hot threads in 7 AI-relevant subreddits (LocalLLaMA, MachineLearning, ClaudeAI, OpenAI, singularity, artificial, AI_Agents). Stickied and NSFW posts filtered, deduped by post id, ranked by score, top 30. Each post carries id, subreddit, title, author, score, upvote_ratio, num_comments, permalink, url, created_utc, flair, is_self, is_video. Refreshed daily at 13:00 UTC. Companion to get_hot_issues: that surfaces developer conversation on GitHub, this surfaces community conversation on Reddit. Titles are sanitized at capture time against prompt-injection tokens. Free, no auth.',
+  {
+    subreddit: z.string().optional().describe('Optional filter to a single subreddit name (e.g. "LocalLLaMA"). Case-insensitive. If absent, returns posts from all 7.'),
+    limit: z.number().min(1).max(30).optional().describe('Max posts to render (default 15, max 30)'),
+  },
+  async ({ subreddit, limit }) => {
+    const data = (await fetchJSON('/reddit/trending')) as {
+      snapshot: {
+        date: string;
+        capturedAt: string;
+        total_posts: number;
+        subreddits_queried: string[];
+        posts: { subreddit: string; title: string; author: string | null; score: number; num_comments: number; permalink: string; flair: string | null }[];
+        summary: { by_subreddit: Record<string, number>; top_authors: { author: string; count: number }[] };
+      };
+    };
+    const s = data.snapshot;
+    const subFilter = subreddit?.trim().toLowerCase();
+    const filtered = subFilter
+      ? s.posts.filter(p => p.subreddit.toLowerCase() === subFilter)
+      : s.posts;
+    const cap = Math.min(limit ?? 15, filtered.length);
+    const fmtCount = (x: number) => x >= 1_000 ? `${(x / 1_000).toFixed(1)}K` : String(x);
+    const lines = filtered.slice(0, cap).map((p, i) => {
+      const author = p.author ? ` by ${p.author}` : '';
+      const flair = p.flair ? ` [${p.flair}]` : '';
+      return `${i + 1}. r/${p.subreddit}: ${p.title}${flair}\n     ${fmtCount(p.score)} pts, ${fmtCount(p.num_comments)} comments${author}\n     ${p.permalink}`;
+    }).join('\n\n');
+    const subs = Object.entries(s.summary.by_subreddit)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([sub, n]) => `r/${sub} (${n})`)
+      .join(', ');
+    let text = `Hot AI Reddit threads. ${s.date}, showing ${cap} of ${filtered.length}`;
+    if (subFilter) text += ` (filtered to r/${subreddit})`;
+    text += '.\n';
+    if (subs && !subFilter) text += `Most-active subreddits: ${subs}\n`;
+    text += '\n' + (lines || '  (no posts)');
+    text += `\n\nSource: reddit.com. Captured ${s.capturedAt}.`;
+    return { content: [{ type: 'text' as const, text }] };
+  },
+);
+
 // ── Start ───────────────────────────────────────────────────────────
 
 async function main() {

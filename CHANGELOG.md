@@ -2,6 +2,11 @@
 
 All notable changes to the [TensorFeed.ai MCP server](https://github.com/RipperMercs/tensorfeed-mcp). Free tools work without configuration; premium tools require a bearer token via the `TENSORFEED_TOKEN` env var. Buy credits at [tensorfeed.ai/developers/agent-payments](https://tensorfeed.ai/developers/agent-payments).
 
+## 1.16.0 - 2026-05-04
+
+### Added
+- `get_reddit_trending` tool. Currently-hot threads from 7 AI-relevant subreddits (LocalLLaMA, MachineLearning, ClaudeAI, OpenAI, singularity, artificial, AI_Agents), ranked by score, top 30. Optional `subreddit` arg to filter to one sub, optional `limit` for the rendered list. Companion to `get_hot_issues`: GitHub developer conversation vs Reddit community conversation. Titles pass through the worker's prompt-injection sanitizer at capture time. Free.
+
 ## 1.15.0 - 2026-05-04
 
 ### Changed
