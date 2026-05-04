@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer, ToolCallback } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { z } from 'zod';
+import { z, ZodRawShape } from 'zod';
+import { sanitizeToolResponse } from './sanitize.js';
 
 const API_BASE = 'https://tensorfeed.ai/api';
 const SDK_VERSION = '1.9.0';
@@ -65,9 +66,34 @@ const server = new McpServer({
   version: SDK_VERSION,
 });
 
+// ── Defense-in-depth tool wrapper ───────────────────────────────────
+// Every tool's text output passes through sanitizeToolResponse before
+// reaching the host LLM. Strips control chars, bidi/zero-width spoofing,
+// and neutralizes role-confusion tokens (ChatML / Llama / Mistral chat
+// markers, "ignore previous instructions", etc). The TensorFeed worker
+// already runs the same scrub on its agent-facing endpoints; this layer
+// covers any new endpoint that might forget it, plus protects against
+// drift between worker rules and what the MCP server should consider
+// safe. See ./sanitize.ts.
+
+function registerTool<Args extends ZodRawShape>(
+  name: string,
+  description: string,
+  paramsSchema: Args,
+  cb: ToolCallback<Args>,
+) {
+  const wrapped = (async (args: unknown, extra: unknown) => {
+    const result = await (cb as (a: unknown, e: unknown) => unknown)(args, extra);
+    return sanitizeToolResponse(result as Parameters<typeof sanitizeToolResponse>[0]);
+  }) as ToolCallback<Args>;
+  // Direct dispatch to the SDK's underlying registration. Do not call
+  // registerTool() here or it will recurse forever.
+  return server.tool(name, description, paramsSchema, wrapped);
+}
+
 // ── Tool: get_ai_news ───────────────────────────────────────────────
 
-server.tool(
+registerTool(
   'get_ai_news',
   'Get the latest AI news articles from TensorFeed.ai. Aggregates from 15+ sources including Anthropic, OpenAI, Google, TechCrunch, The Verge, arXiv, and more.',
   {
@@ -93,7 +119,7 @@ server.tool(
 
 // ── Tool: get_ai_status ─────────────────────────────────────────────
 
-server.tool(
+registerTool(
   'get_ai_status',
   'Get real-time operational status of major AI services (Claude, OpenAI, Gemini, Mistral, Cohere, Replicate, Hugging Face).',
   {},
@@ -117,7 +143,7 @@ server.tool(
 
 // ── Tool: is_service_down ───────────────────────────────────────────
 
-server.tool(
+registerTool(
   'is_service_down',
   'Check if a specific AI service is currently down or experiencing issues.',
   {
@@ -153,7 +179,7 @@ server.tool(
 
 // ── Tool: get_model_pricing ─────────────────────────────────────────
 
-server.tool(
+registerTool(
   'get_model_pricing',
   'Get AI model pricing comparison across all major providers (Anthropic, OpenAI, Google, Meta, Mistral, Cohere). Prices per 1M tokens.',
   {},
@@ -187,7 +213,7 @@ server.tool(
 
 // ── Tool: get_ai_today ──────────────────────────────────────────────
 
-server.tool(
+registerTool(
   'get_ai_today',
   'Get a summary of what happened in AI today. Returns the top stories from the last 24 hours.',
   {
@@ -208,7 +234,7 @@ server.tool(
 
 // ── Tool: get_agent_activity ────────────────────────────────────────
 
-server.tool(
+registerTool(
   'get_agent_activity',
   'Get live AI bot traffic on TensorFeed.ai. Returns today\'s bot hit count, the most recent 50 hits with bot name + endpoint + timestamp, and a derived top-bots breakdown. Useful when an agent wants to see which crawlers are pulling AI ecosystem data and how that distribution shifts. Free, no auth.',
   {},
@@ -256,7 +282,7 @@ server.tool(
 
 // ── Tool: get_account_balance ───────────────────────────────────────
 
-server.tool(
+registerTool(
   'get_account_balance',
   'Check the credit balance for the configured TensorFeed bearer token. Free, but requires TENSORFEED_TOKEN to be set.',
   {},
@@ -280,7 +306,7 @@ server.tool(
 
 // ── Tool: get_account_usage ─────────────────────────────────────────
 
-server.tool(
+registerTool(
   'get_account_usage',
   'Show per-endpoint usage for the configured TensorFeed token (last 100 calls aggregated). Free, but requires TENSORFEED_TOKEN.',
   {},
@@ -310,7 +336,7 @@ server.tool(
 
 // ── Tool: premium_routing (1 credit) ────────────────────────────────
 
-server.tool(
+registerTool(
   'premium_routing',
   'Get a ranked list of recommended AI models for a task with full score breakdown (quality, availability, cost, latency). Costs 1 credit.',
   {
@@ -351,7 +377,7 @@ server.tool(
 
 // ── Tool: pricing_series (1 credit) ─────────────────────────────────
 
-server.tool(
+registerTool(
   'pricing_series',
   'Daily price points for one AI model with min/max/delta summary. Default range = last 30 days, max 90 days. Costs 1 credit.',
   {
@@ -395,7 +421,7 @@ server.tool(
 
 // ── Tool: benchmark_series (1 credit) ───────────────────────────────
 
-server.tool(
+registerTool(
   'benchmark_series',
   'Score evolution for a single benchmark on one AI model. Costs 1 credit. Benchmark keys: swe_bench, mmlu_pro, gpqa_diamond, math, human_eval.',
   {
@@ -432,7 +458,7 @@ server.tool(
 
 // ── Tool: status_uptime (1 credit) ──────────────────────────────────
 
-server.tool(
+registerTool(
   'status_uptime',
   'Daily uptime rollup for one provider with operational/degraded/down day counts and uptime % (degraded counts as half-credit). Costs 1 credit.',
   {
@@ -475,7 +501,7 @@ server.tool(
 
 // ── Tool: premium_agents_directory (1 credit) ───────────────────────
 
-server.tool(
+registerTool(
   'premium_agents_directory',
   'Enriched AI agents catalog joined with live status, recent news, agent traffic, flagship pricing, and a 0-100 trending_score. Costs 1 credit.',
   {
@@ -528,7 +554,7 @@ server.tool(
 
 // ── Tool: whats_new (1 credit) ──────────────────────────────────────
 
-server.tool(
+registerTool(
   'whats_new',
   'Agent morning brief: pricing changes, new/removed models, status incidents, and top news from the last 1-7 days. The tool to call when your agent boots up. Costs 1 credit.',
   {
@@ -581,7 +607,7 @@ server.tool(
 
 // ── Tool: compare_models (1 credit) ─────────────────────────────────
 
-server.tool(
+registerTool(
   'compare_models',
   'Side-by-side comparison of 2-5 AI models. Returns pricing, benchmarks (normalized to a union of keys with null for missing scores), provider status, and recent news per model, plus rankings (cheapest blended, most context, per-benchmark leaderboard). Costs 1 credit.',
   {
@@ -629,7 +655,7 @@ server.tool(
 
 // ── Tool: provider_deepdive (1 credit) ──────────────────────────────
 
-server.tool(
+registerTool(
   'provider_deepdive',
   'Everything about an AI provider in one call: live status, all models with pricing + tier + benchmark scores joined in, recent news mentions, and agent traffic. Costs 1 credit. Aggregation IS the value; doing this from free endpoints would take 4 round-trips.',
   {
@@ -675,7 +701,7 @@ server.tool(
 
 // ── Tool: cost_projection (1 credit) ────────────────────────────────
 
-server.tool(
+registerTool(
   'cost_projection',
   'Project the cost of a token-usage workload across 1-10 AI models. Returns daily/weekly/monthly/yearly totals per model and a ranking by cheapest monthly. Costs 1 credit.',
   {
@@ -724,7 +750,7 @@ server.tool(
 
 // ── Tool: news_search (1 credit) ────────────────────────────────────
 
-server.tool(
+registerTool(
   'news_search',
   'Full-text search over the TensorFeed news article corpus with optional date range, provider, and category filters. Relevance scoring with recency boost. Costs 1 credit.',
   {
@@ -772,7 +798,7 @@ server.tool(
 
 // ── Tool: list_watches ──────────────────────────────────────────────
 
-server.tool(
+registerTool(
   'list_watches',
   'List the active webhook watches owned by the configured TensorFeed token. Free, requires TENSORFEED_TOKEN.',
   {},
@@ -807,7 +833,7 @@ server.tool(
 
 // ── Tool: create_price_watch (1 credit) ─────────────────────────────
 
-server.tool(
+registerTool(
   'create_price_watch',
   'Register a webhook watch on a model price change. Costs 1 credit. Watch lives 90 days. Each fire is an HMAC-signed POST to callback_url.',
   {
@@ -841,7 +867,7 @@ server.tool(
 
 // ── Tool: create_status_watch (1 credit) ────────────────────────────
 
-server.tool(
+registerTool(
   'create_status_watch',
   'Register a webhook watch on a service status transition (e.g. anthropic becomes down). Costs 1 credit. Watch lives 90 days.',
   {
@@ -874,7 +900,7 @@ server.tool(
 
 // ── Tool: create_digest_watch (1 credit) ────────────────────────────
 
-server.tool(
+registerTool(
   'create_digest_watch',
   'Register a scheduled digest webhook that fires daily or weekly with a curated summary of pricing changes (regardless of whether anything dramatic happened). Costs 1 credit. Watch lives 90 days. Set-and-forget for agents that want a periodic snapshot without subscribing to realtime transitions.',
   {
@@ -905,7 +931,7 @@ server.tool(
 
 // ── Tool: delete_watch ──────────────────────────────────────────────
 
-server.tool(
+registerTool(
   'delete_watch',
   'Delete one of your active webhook watches by id. Free, requires TENSORFEED_TOKEN.',
   {
@@ -919,7 +945,7 @@ server.tool(
 
 // ── Tool: probe_latest (free) ───────────────────────────────────────
 
-server.tool(
+registerTool(
   'probe_latest',
   'Last 24 hours of measured LLM endpoint latency and availability per provider (Anthropic, OpenAI, Google, Mistral, Cohere). TensorFeed pings each provider\'s chat completion endpoint every 15 min and records time-to-first-byte, total response time, and HTTP status. Returns per-provider success rate and ttfb/total p50/p95/p99 latency. The data is unique because we measure it ourselves, not self-reported by the providers. Useful when an agent needs to pick a provider whose SLA you can verify, or to detect ongoing incidents before they hit a status page. Free, no auth.',
   {},
@@ -966,7 +992,7 @@ server.tool(
 
 // ── Tool: probe_series (1 credit) ───────────────────────────────────
 
-server.tool(
+registerTool(
   'probe_series',
   'Daily SLA series for one LLM provider, measured by TensorFeed. Returns per-day count, success rate, ttfb p50/p95/p99, total p50/p95/p99, and incident-hour count across the requested window. Provider status pages are politically managed; this is the measured truth. Pairs naturally with premium_routing for picking a model whose SLA you can verify. Costs 1 credit.',
   {
@@ -1021,7 +1047,7 @@ server.tool(
 
 // ── Tool: mcp_registry_snapshot (free) ──────────────────────────────
 
-server.tool(
+registerTool(
   'mcp_registry_snapshot',
   'Today\'s summary of the official Model Context Protocol server registry. Returns total servers, by-status breakdown, top namespaces, and 1-day deltas (newly added, reactivated, deprecated). Captured daily at 9:30 AM UTC from registry.modelcontextprotocol.io. Useful when an agent wants to see how the MCP ecosystem is growing or detect freshly-deprecated servers it may be using. Free, no auth.',
   {},
@@ -1073,7 +1099,7 @@ server.tool(
 
 // ── Tool: mcp_registry_series (1 credit) ────────────────────────────
 
-server.tool(
+registerTool(
   'mcp_registry_series',
   'Multi-day series of MCP server registry growth and churn. Returns per-day total servers, active count, and daily added/removed counts across the requested window. The registry itself is open data, but a 30/90-day trend requires daily capture started weeks ago, which TensorFeed has been running. Costs 1 credit.',
   {
