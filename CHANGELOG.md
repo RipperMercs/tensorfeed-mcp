@@ -2,6 +2,11 @@
 
 All notable changes to the [TensorFeed.ai MCP server](https://github.com/RipperMercs/tensorfeed-mcp). Free tools work without configuration; premium tools require a bearer token via the `TENSORFEED_TOKEN` env var. Buy credits at [tensorfeed.ai/developers/agent-payments](https://tensorfeed.ai/developers/agent-payments).
 
+## 1.19.0 - 2026-05-04
+
+### Added
+- `get_ai_ecosystem_today` tool. One-shot composite AI morning brief that internally fans out across 9 free TensorFeed endpoints in parallel (news, 3 paper feeds, HF models/datasets/Spaces, hot GitHub issues, Reddit threads, OpenRouter catalog summary, provider status) and returns a single synthesized text response. Optional `sections` arg (any subset of news / papers / hf / community / inference / status) and `limit_per_section` arg. Graceful degradation: any one feed failing just drops its section. Designed for agents that want a fast snapshot without 8 separate tool calls. Free.
+
 ## 1.18.0 - 2026-05-04
 
 ### Added

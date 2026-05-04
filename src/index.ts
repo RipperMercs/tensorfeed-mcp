@@ -1470,6 +1470,191 @@ registerTool(
   },
 );
 
+// ── Tool: get_ai_ecosystem_today (free, composite) ──────────────────
+// Fans out across the daily feeds in parallel and synthesizes one
+// morning brief. Designed for agents that want a single tool call to
+// understand "what is the AI ecosystem doing today" without calling
+// 8 separate tools and merging by hand. Graceful degradation: any
+// one feed failing just drops its section, the rest still render.
+
+registerTool(
+  'get_ai_ecosystem_today',
+  'One-shot composite AI morning brief. Internally fans out across 9 free TensorFeed endpoints in parallel (news, 3 paper feeds, HF models/datasets/Spaces, hot GitHub issues, hot Reddit threads, OpenRouter catalog summary, provider status) and returns a single synthesized text response. Use this when an agent needs a fast snapshot of "what is happening in AI today" without the 8 separate tool calls. Each subsection can be skipped or trimmed via the sections / limit_per_section args. Captured-at timestamps from each underlying snapshot are surfaced so the agent knows recency. Free, no auth.',
+  {
+    sections: z.array(z.enum([
+      'news', 'papers', 'hf', 'community', 'inference', 'status',
+    ])).optional().describe('Which subsections to include (default: all six). "papers" covers all 3 paper feeds; "hf" covers models + datasets + spaces; "community" covers hot GitHub issues + Reddit threads; "inference" is the OpenRouter catalog summary.'),
+    limit_per_section: z.number().min(1).max(10).optional().describe('Max items per subsection (default 3, max 10). The output is intentionally terse so an agent can call this without burning context.'),
+  },
+  async ({ sections, limit_per_section }) => {
+    const include = new Set(sections ?? ['news', 'papers', 'hf', 'community', 'inference', 'status']);
+    const N = Math.min(limit_per_section ?? 3, 10);
+
+    type AnyJson = Record<string, unknown>;
+    const fetchSafely = async (path: string): Promise<AnyJson | null> => {
+      try {
+        return (await fetchJSON(path)) as AnyJson;
+      } catch (err) {
+        console.error(`get_ai_ecosystem_today: ${path} failed:`, err);
+        return null;
+      }
+    };
+
+    const [
+      newsR, papersAIR, papersArxivR, papersHFR, hfR, issuesR, redditR, orR, statusR,
+    ] = await Promise.all([
+      include.has('news') ? fetchSafely(`/news?limit=${N}`) : null,
+      include.has('papers') ? fetchSafely('/papers/ai-trending') : null,
+      include.has('papers') ? fetchSafely('/papers/arxiv-recent') : null,
+      include.has('papers') ? fetchSafely('/papers/hf-daily') : null,
+      include.has('hf') ? fetchSafely('/hf/trending') : null,
+      include.has('community') ? fetchSafely('/issues/hot') : null,
+      include.has('community') ? fetchSafely('/reddit/trending') : null,
+      include.has('inference') ? fetchSafely('/openrouter/models') : null,
+      include.has('status') ? fetchSafely('/status') : null,
+    ]);
+
+    const fmtCount = (x: number): string =>
+      x >= 1_000_000 ? `${(x / 1_000_000).toFixed(1)}M`
+        : x >= 1_000 ? `${(x / 1_000).toFixed(1)}K`
+          : String(x);
+
+    const sectionTexts: string[] = [];
+
+    // News
+    if (include.has('news') && newsR) {
+      const articles = (newsR.articles as Array<{ title: string; source: string; url: string; publishedAt: string }> | undefined) ?? [];
+      if (articles.length > 0) {
+        const lines = articles.slice(0, N).map((a, i) => `  ${i + 1}. ${a.title} (${a.source})\n     ${a.url}`).join('\n');
+        sectionTexts.push(`📰 NEWS (top ${Math.min(N, articles.length)})\n${lines}`);
+      }
+    }
+
+    // Papers - synthesize one line per feed
+    if (include.has('papers')) {
+      const paperBits: string[] = [];
+
+      const ai = (papersAIR?.snapshot as { papers?: Array<{ title: string; authors?: string[]; venue?: string | null; citationCount?: number; arxivId?: string | null }> } | undefined);
+      if (ai?.papers && ai.papers.length > 0) {
+        const top = ai.papers.slice(0, N).map((p, i) => {
+          const authors = (p.authors ?? []).slice(0, 2).join(', ') + ((p.authors?.length ?? 0) > 2 ? ' et al.' : '');
+          const cites = typeof p.citationCount === 'number' ? `${fmtCount(p.citationCount)} citations` : '';
+          const venue = p.venue ? ` ${p.venue}.` : '';
+          return `    ${i + 1}. ${p.title}${venue} ${authors}. ${cites}`;
+        }).join('\n');
+        paperBits.push(`  By citation count (Semantic Scholar):\n${top}`);
+      }
+
+      const recent = (papersArxivR?.snapshot as { papers?: Array<{ title: string; arxivId: string; publishedAt?: string; authors?: string[] }> } | undefined);
+      if (recent?.papers && recent.papers.length > 0) {
+        const top = recent.papers.slice(0, N).map((p, i) => {
+          const date = p.publishedAt ? p.publishedAt.slice(0, 10) : '';
+          const authors = (p.authors ?? []).slice(0, 2).join(', ') + ((p.authors?.length ?? 0) > 2 ? ' et al.' : '');
+          return `    ${i + 1}. ${p.title} (arXiv:${p.arxivId}, ${date}). ${authors}`;
+        }).join('\n');
+        paperBits.push(`  Just submitted (arXiv recent):\n${top}`);
+      }
+
+      const hfd = (papersHFR?.snapshot as { papers?: Array<{ title: string; upvotes: number; num_comments: number; hf_url: string }> } | undefined);
+      if (hfd?.papers && hfd.papers.length > 0) {
+        const top = hfd.papers.slice(0, N).map((p, i) =>
+          `    ${i + 1}. ${p.title} (${p.upvotes} upvotes, ${p.num_comments} comments)`,
+        ).join('\n');
+        paperBits.push(`  HF editor picks today:\n${top}`);
+      }
+
+      if (paperBits.length > 0) {
+        sectionTexts.push(`📄 PAPERS\n${paperBits.join('\n')}`);
+      }
+    }
+
+    // Hugging Face
+    if (include.has('hf') && hfR) {
+      const snap = hfR.snapshot as { models?: { items?: Array<{ id: string; downloads: number }> }; datasets?: { items?: Array<{ id: string; downloads: number }> }; spaces?: { items?: Array<{ id: string; likes: number }> } } | undefined;
+      const bits: string[] = [];
+      const m = snap?.models?.items ?? [];
+      const d = snap?.datasets?.items ?? [];
+      const s = snap?.spaces?.items ?? [];
+      if (m.length > 0) {
+        bits.push(`  Models (top by downloads):\n` + m.slice(0, N).map((x, i) => `    ${i + 1}. ${x.id} (${fmtCount(x.downloads)} downloads)`).join('\n'));
+      }
+      if (d.length > 0) {
+        bits.push(`  Datasets (top by downloads):\n` + d.slice(0, N).map((x, i) => `    ${i + 1}. ${x.id} (${fmtCount(x.downloads)} downloads)`).join('\n'));
+      }
+      if (s.length > 0) {
+        bits.push(`  Spaces (top by likes):\n` + s.slice(0, N).map((x, i) => `    ${i + 1}. ${x.id} (${fmtCount(x.likes)} likes)`).join('\n'));
+      }
+      if (bits.length > 0) sectionTexts.push(`🤗 HUGGING FACE\n${bits.join('\n')}`);
+    }
+
+    // Community
+    if (include.has('community')) {
+      const bits: string[] = [];
+      const issues = (issuesR?.snapshot as { issues?: Array<{ title: string; repo: string; comments: number; url: string }> } | undefined)?.issues ?? [];
+      if (issues.length > 0) {
+        const lines = issues.slice(0, N).map((it, i) => `    ${i + 1}. ${it.repo}: ${it.title} (${it.comments} comments)\n       ${it.url}`).join('\n');
+        bits.push(`  GitHub hot issues:\n${lines}`);
+      }
+      const posts = (redditR?.snapshot as { posts?: Array<{ title: string; subreddit: string; score: number; num_comments: number; permalink: string }> } | undefined)?.posts ?? [];
+      if (posts.length > 0) {
+        const lines = posts.slice(0, N).map((p, i) => `    ${i + 1}. r/${p.subreddit}: ${p.title} (${p.score} pts, ${p.num_comments} comments)\n       ${p.permalink}`).join('\n');
+        bits.push(`  Reddit hot threads:\n${lines}`);
+      }
+      if (bits.length > 0) sectionTexts.push(`💬 COMMUNITY\n${bits.join('\n')}`);
+    }
+
+    // Inference catalog
+    if (include.has('inference') && orR) {
+      const snap = orR.snapshot as { total_models?: number; summary?: { cheapest_input?: { id: string; usd_per_million: number } | null; largest_context?: { id: string; tokens: number } | null; free_tier_count?: number; by_namespace?: Array<{ namespace: string; count: number }> } } | undefined;
+      if (snap?.summary) {
+        const lines: string[] = [];
+        if (typeof snap.total_models === 'number') lines.push(`  ${snap.total_models} models across providers (OpenRouter)`);
+        if (snap.summary.cheapest_input) lines.push(`  Cheapest input: ${snap.summary.cheapest_input.id} at $${snap.summary.cheapest_input.usd_per_million.toFixed(2)}/Mtok`);
+        if (snap.summary.largest_context) lines.push(`  Largest context: ${snap.summary.largest_context.id} at ${fmtCount(snap.summary.largest_context.tokens)} tokens`);
+        if (typeof snap.summary.free_tier_count === 'number') lines.push(`  Free-tier models available: ${snap.summary.free_tier_count}`);
+        if (snap.summary.by_namespace && snap.summary.by_namespace.length > 0) {
+          lines.push(`  Top namespaces: ${snap.summary.by_namespace.slice(0, 5).map(n => `${n.namespace} (${n.count})`).join(', ')}`);
+        }
+        if (lines.length > 0) sectionTexts.push(`⚙️  INFERENCE CATALOG\n${lines.join('\n')}`);
+      }
+    }
+
+    // Status
+    if (include.has('status') && statusR) {
+      const services = (statusR.services as Array<{ name: string; provider: string; status: string }> | undefined) ?? [];
+      const issues = services.filter(s => s.status !== 'operational');
+      if (issues.length === 0) {
+        sectionTexts.push(`✓  STATUS: all tracked AI providers operational (${services.length} services)`);
+      } else {
+        const lines = issues.map(s => `  ${s.name} (${s.provider}): ${s.status.toUpperCase()}`).join('\n');
+        sectionTexts.push(`⚠️  STATUS\n${lines}`);
+      }
+    }
+
+    if (sectionTexts.length === 0) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: 'No data could be fetched right now. All upstream feeds returned empty or errored. Try again in a minute or call the underlying tools individually for diagnostic detail.',
+          },
+        ],
+      };
+    }
+
+    const header = `TensorFeed AI ecosystem brief, ${new Date().toISOString()}`;
+    const body = sectionTexts.join('\n\n');
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `${header}\n\n${body}\n\nFor any subsection, call the underlying tool directly: get_ai_news, get_ai_papers_trending, get_arxiv_recent, get_hf_daily_papers, get_hf_trending, get_hot_issues, get_reddit_trending, get_openrouter_models, get_ai_status.`,
+        },
+      ],
+    };
+  },
+);
+
 // ── Start ───────────────────────────────────────────────────────────
 
 async function main() {
