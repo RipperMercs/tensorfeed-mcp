@@ -1435,6 +1435,41 @@ registerTool(
   },
 );
 
+// ── Tool: get_hf_daily_papers (free) ────────────────────────────────
+
+registerTool(
+  'get_hf_daily_papers',
+  'Hugging Face Daily Papers: editor-curated AI/ML papers from huggingface.co/papers, layered with community upvotes and discussion counts. Different signal from get_arxiv_recent (firehose) and get_ai_papers_trending (citation-ranked all-time): this is editor picks of-the-day with engagement signal. Each paper carries paperId, title, summary, authors, upvotes, num_comments, hf_url, arxiv_url (when applicable), github_repo, github_stars, ai_keywords. Refreshed daily at 14:30 UTC. Titles sanitized at capture time. Free, no auth.',
+  {
+    limit: z.number().min(1).max(30).optional().describe('Max papers to render (default 15, max 30)'),
+  },
+  async ({ limit }) => {
+    const data = (await fetchJSON('/papers/hf-daily')) as {
+      snapshot: {
+        date: string;
+        capturedAt: string;
+        total_papers: number;
+        papers: { paperId: string; title: string; authors: string[]; upvotes: number; num_comments: number; hf_url: string; arxiv_url: string | null; ai_keywords: string[] }[];
+        summary: { by_keyword: { keyword: string; count: number }[]; most_upvoted: { paperId: string; title: string; upvotes: number } | null };
+      };
+    };
+    const s = data.snapshot;
+    const cap = Math.min(limit ?? 15, s.papers.length);
+    const lines = s.papers.slice(0, cap).map((p, i) => {
+      const authors = p.authors.slice(0, 3).join(', ') + (p.authors.length > 3 ? ' et al.' : '');
+      const kw = p.ai_keywords.length > 0 ? `\n     keywords: ${p.ai_keywords.slice(0, 5).join(', ')}` : '';
+      const arxiv = p.arxiv_url ? `\n     arxiv: ${p.arxiv_url}` : '';
+      return `${i + 1}. ${p.title}\n     ${authors}\n     ${p.upvotes} upvotes, ${p.num_comments} comments\n     ${p.hf_url}${arxiv}${kw}`;
+    }).join('\n\n');
+    const kw = s.summary.by_keyword.slice(0, 5).map(k => `${k.keyword} (${k.count})`).join(', ');
+    let text = `HF Daily Papers (editor-curated). ${s.date}, showing ${cap} of ${s.total_papers}.\n`;
+    if (kw) text += `Top keywords: ${kw}\n`;
+    if (s.summary.most_upvoted) text += `Most upvoted: "${s.summary.most_upvoted.title}" (${s.summary.most_upvoted.upvotes})\n`;
+    text += '\n' + lines + `\n\nSource: huggingface.co/papers. Captured ${s.capturedAt}.`;
+    return { content: [{ type: 'text' as const, text }] };
+  },
+);
+
 // ── Start ───────────────────────────────────────────────────────────
 
 async function main() {

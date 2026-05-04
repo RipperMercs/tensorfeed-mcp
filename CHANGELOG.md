@@ -2,6 +2,11 @@
 
 All notable changes to the [TensorFeed.ai MCP server](https://github.com/RipperMercs/tensorfeed-mcp). Free tools work without configuration; premium tools require a bearer token via the `TENSORFEED_TOKEN` env var. Buy credits at [tensorfeed.ai/developers/agent-payments](https://tensorfeed.ai/developers/agent-payments).
 
+## 1.18.0 - 2026-05-04
+
+### Added
+- `get_hf_daily_papers` tool. Hugging Face Daily Papers (editor-curated AI/ML papers with community upvotes and discussion counts). Different signal from `get_arxiv_recent` and `get_ai_papers_trending`. Optional `limit` arg. Free.
+
 ## 1.17.0 - 2026-05-04
 
 ### Added
