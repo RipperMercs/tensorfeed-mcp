@@ -2,6 +2,11 @@
 
 All notable changes to the [TensorFeed.ai MCP server](https://github.com/RipperMercs/tensorfeed-mcp). Free tools work without configuration; premium tools require a bearer token via the `TENSORFEED_TOKEN` env var. Buy credits at [tensorfeed.ai/developers/agent-payments](https://tensorfeed.ai/developers/agent-payments).
 
+## 1.15.0 - 2026-05-04
+
+### Changed
+- `get_hf_trending` tool now covers Hugging Face Spaces in addition to models and datasets. Spaces are ranked by likes (the right signal for hosted apps where downloads is meaningless) and the rendered entry shows id, sdk, likes, runtime stage when available, and hardware tier when available. New `section` enum values: `'spaces'` (just spaces), `'all'` (all three sections, the new default). `'both'` continues to mean models+datasets for backward compat. Output also surfaces top Space SDKs (gradio / streamlit / docker / static) in the header.
+
 ## 1.14.0 - 2026-05-04
 
 ### Added

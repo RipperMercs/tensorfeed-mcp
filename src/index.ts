@@ -1227,9 +1227,9 @@ registerTool(
 
 registerTool(
   'get_hf_trending',
-  'Top 30 most-downloaded models and top 30 most-downloaded datasets on Hugging Face. Captured daily at 12:00 UTC against the public HF API (no auth). Each entry carries id, downloads, likes, pipeline_tag (models), tags, lastModified, private, gated. Use this when an agent wants the current shape of the open model/dataset ecosystem. Once enough daily snapshots accumulate, day-over-day download deltas become a real trending signal. Free, no auth.',
+  'Top Hugging Face models, datasets, and Spaces. Models + datasets ranked by downloads (top 30 each); Spaces ranked by likes (top 30, since downloads is meaningless for hosted apps). Captured daily at 12:00 UTC against the public HF API (no auth). Each model entry carries id, downloads, likes, pipeline_tag, tags, lastModified, private, gated. Each space entry carries id, author, sdk (gradio/streamlit/static/docker), likes, tags, lastModified, private, runtime_stage, hardware. Use this when an agent wants the current shape of the open model + dataset + app ecosystem. Once enough daily snapshots accumulate, day-over-day deltas become a real trending signal. Free, no auth.',
   {
-    section: z.enum(['models', 'datasets', 'both']).optional().describe('Which to include in the rendered output (default both)'),
+    section: z.enum(['models', 'datasets', 'spaces', 'all', 'both']).optional().describe('Which to include in the rendered output (default all). "both" is accepted as alias for "models+datasets" for backward compat.'),
     limit: z.number().min(1).max(30).optional().describe('Max items per section (default 15, max 30)'),
   },
   async ({ section, limit }) => {
@@ -1239,11 +1239,12 @@ registerTool(
         capturedAt: string;
         models: { items: { id: string; downloads: number; likes: number; pipeline_tag: string | null }[] };
         datasets: { items: { id: string; downloads: number; likes: number }[] };
-        summary: { top_pipeline_tags: { tag: string; count: number }[]; top_namespaces: { namespace: string; count: number }[] };
+        spaces: { items: { id: string; sdk: string | null; likes: number; runtime_stage: string | null; hardware: string | null }[] };
+        summary: { top_pipeline_tags: { tag: string; count: number }[]; top_namespaces: { namespace: string; count: number }[]; top_space_sdks: { sdk: string; count: number }[] };
       };
     };
     const s = data.snapshot;
-    const sec = section ?? 'both';
+    const sec = section ?? 'all';
     const n = Math.min(limit ?? 15, 30);
     const fmtCount = (x: number) => x >= 1_000_000 ? `${(x / 1_000_000).toFixed(1)}M` : x >= 1_000 ? `${(x / 1_000).toFixed(1)}K` : String(x);
 
@@ -1254,15 +1255,27 @@ registerTool(
     const datasetLines = s.datasets.items.slice(0, n).map((d, i) =>
       `${i + 1}. ${d.id}  ${fmtCount(d.downloads)} downloads, ${fmtCount(d.likes)} likes`,
     ).join('\n');
+    const spaceLines = (s.spaces?.items ?? []).slice(0, n).map((sp, i) => {
+      const sdk = sp.sdk ? ` [${sp.sdk}]` : '';
+      const hw = sp.hardware ? `, hw: ${sp.hardware}` : '';
+      const stage = sp.runtime_stage ? `, ${sp.runtime_stage.toLowerCase()}` : '';
+      return `${i + 1}. ${sp.id}${sdk}  ${fmtCount(sp.likes)} likes${stage}${hw}`;
+    }).join('\n');
 
     const pipelines = s.summary.top_pipeline_tags.slice(0, 5).map(t => `${t.tag} (${t.count})`).join(', ');
     const namespaces = s.summary.top_namespaces.slice(0, 5).map(n => `${n.namespace} (${n.count})`).join(', ');
+    const sdks = (s.summary.top_space_sdks ?? []).slice(0, 5).map(t => `${t.sdk} (${t.count})`).join(', ');
 
-    let text = `Hugging Face top-downloaded. ${s.date}.\n`;
+    let text = `Hugging Face top assets. ${s.date}.\n`;
     if (pipelines) text += `Top pipeline tags (models): ${pipelines}\n`;
+    if (sdks) text += `Top Space SDKs: ${sdks}\n`;
     if (namespaces) text += `Top namespaces: ${namespaces}\n`;
-    if (sec === 'models' || sec === 'both') text += `\nModels:\n${modelLines}\n`;
-    if (sec === 'datasets' || sec === 'both') text += `\nDatasets:\n${datasetLines}\n`;
+    const includeModels = sec === 'models' || sec === 'all' || sec === 'both';
+    const includeDatasets = sec === 'datasets' || sec === 'all' || sec === 'both';
+    const includeSpaces = sec === 'spaces' || sec === 'all';
+    if (includeModels) text += `\nModels (by downloads):\n${modelLines}\n`;
+    if (includeDatasets) text += `\nDatasets (by downloads):\n${datasetLines}\n`;
+    if (includeSpaces) text += `\nSpaces (by likes):\n${spaceLines || '  (none returned)'}\n`;
     text += `\nSource: huggingface.co. Captured ${s.capturedAt}.`;
     return { content: [{ type: 'text' as const, text }] };
   },
