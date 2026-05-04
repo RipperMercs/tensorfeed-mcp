@@ -1,0 +1,20 @@
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    properties:
+      tensorfeedToken:
+        type: string
+        title: TensorFeed Token
+        description: Optional bearer token (tf_live_...) to unlock premium tools. Omit for free tools only. Buy credits in USDC on Base at https://tensorfeed.ai/developers/agent-payments.
+    required: []
+  commandFunction: |-
+    (config) => ({
+      command: 'tensorfeed-mcp',
+      args: [],
+      env: config.tensorfeedToken ? { TENSORFEED_TOKEN: config.tensorfeedToken } : {}
+    })
+  exampleConfig: {}
+build:
+  dockerfile: Dockerfile
+  dockerBuildPath: .

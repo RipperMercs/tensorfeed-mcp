@@ -1,0 +1,72 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "ai.tensorfeed/mcp-server",
+  "title": "TensorFeed",
+  "description": "AI news, model pricing, service status, and machine-payable premium tools. AFTA-certified.",
+  "version": "1.11.0",
+  "websiteUrl": "https://tensorfeed.ai/developers/agent-payments",
+  "repository": {
+    "url": "https://github.com/RipperMercs/tensorfeed-mcp",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "@tensorfeed/mcp-server",
+      "version": "1.11.0",
+      "runtimeHint": "npx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "TENSORFEED_TOKEN",
+          "description": "Bearer token from /api/payment/buy-credits. Required for premium tools (routing, history series, news search, cost projection, webhook watches, enriched agents directory, account balance/usage). Free tools (news, status, pricing, benchmarks, today summary) work without it. Buy credits in USDC on Base at https://tensorfeed.ai/developers/agent-payments.",
+          "isRequired": false,
+          "isSecret": true
+        }
+      ]
+    }
+  ],
+  "_meta": {
+    "io.modelcontextprotocol.registry/publisher-provided": {
+      "categories": ["news", "ai-models", "data", "payments"],
+      "tags": ["ai-news", "x402", "usdc", "base", "model-routing", "agent-payments", "machine-payable", "stablecoin"],
+      "license": "MIT",
+      "premium": true,
+      "premiumPaymentMethod": "USDC on Base mainnet",
+      "freeTools": [
+        "get_ai_news",
+        "get_ai_status",
+        "is_service_down",
+        "get_model_pricing",
+        "get_ai_today",
+        "get_agent_activity",
+        "mcp_registry_snapshot",
+        "probe_latest"
+      ],
+      "premiumTools": [
+        "premium_routing",
+        "pricing_series",
+        "benchmark_series",
+        "status_uptime",
+        "premium_agents_directory",
+        "news_search",
+        "cost_projection",
+        "provider_deepdive",
+        "compare_models",
+        "whats_new",
+        "mcp_registry_series",
+        "probe_series",
+        "list_watches",
+        "create_price_watch",
+        "create_status_watch",
+        "create_digest_watch",
+        "delete_watch",
+        "get_account_balance",
+        "get_account_usage"
+      ]
+    }
+  }
+}

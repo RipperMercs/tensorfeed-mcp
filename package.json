@@ -1,0 +1,41 @@
+{
+  "name": "@tensorfeed/mcp-server",
+  "version": "1.11.0",
+  "mcpName": "ai.tensorfeed/mcp-server",
+  "description": "MCP server for TensorFeed.ai - AI news, status, model data, and premium endpoints (routing, cost projection, forecast, history series, news search, webhook watches with digest tier, enriched directory) for AI agents",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "bin": {
+    "tensorfeed-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "server.json",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "keywords": ["mcp", "ai", "news", "tensorfeed", "model-context-protocol", "claude", "agents", "x402", "usdc", "base", "model-routing", "agent-payments"],
+  "author": "TensorFeed.ai",
+  "license": "MIT",
+  "homepage": "https://tensorfeed.ai/developers",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/RipperMercs/tensorfeed-mcp"
+  },
+  "bugs": {
+    "url": "https://github.com/RipperMercs/tensorfeed-mcp/issues"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.28.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "typescript": "^6.0.2"
+  }
+}
