@@ -2,6 +2,11 @@
 
 All notable changes to the [TensorFeed.ai MCP server](https://github.com/RipperMercs/tensorfeed-mcp). Free tools work without configuration; premium tools require a bearer token via the `TENSORFEED_TOKEN` env var. Buy credits at [tensorfeed.ai/developers/agent-payments](https://tensorfeed.ai/developers/agent-payments).
 
+## 1.20.0 - 2026-05-04
+
+### Changed
+- `get_ai_ecosystem_today` now calls the new `/api/today` worker endpoint (single fetch) instead of fanning out 9 individual fetches client-side. Behavior is unchanged from the agent's perspective: same args, same text-rendered output. The win is that the worker's edge cache absorbs the load: a thousand agents calling `get_ai_ecosystem_today` per minute now hit the worker once for 5 minutes (cache TTL) instead of 9000 times. Net cost on the worker stays constant.
+
 ## 1.19.0 - 2026-05-04
 
 ### Added

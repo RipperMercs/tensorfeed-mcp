@@ -1471,15 +1471,16 @@ registerTool(
 );
 
 // ── Tool: get_ai_ecosystem_today (free, composite) ──────────────────
-// Fans out across the daily feeds in parallel and synthesizes one
-// morning brief. Designed for agents that want a single tool call to
-// understand "what is the AI ecosystem doing today" without calling
-// 8 separate tools and merging by hand. Graceful degradation: any
-// one feed failing just drops its section, the rest still render.
+// Single fetch to /api/today which fans out worker-side. The previous
+// implementation made 9 separate fetches per agent invocation; now
+// the worker's edge cache absorbs the load and serves one cached
+// response to all concurrent agents. Output stays text-rendered
+// (MCP returns text content) but the wire shape is the structured
+// JSON the worker produces.
 
 registerTool(
   'get_ai_ecosystem_today',
-  'One-shot composite AI morning brief. Internally fans out across 9 free TensorFeed endpoints in parallel (news, 3 paper feeds, HF models/datasets/Spaces, hot GitHub issues, hot Reddit threads, OpenRouter catalog summary, provider status) and returns a single synthesized text response. Use this when an agent needs a fast snapshot of "what is happening in AI today" without the 8 separate tool calls. Each subsection can be skipped or trimmed via the sections / limit_per_section args. Captured-at timestamps from each underlying snapshot are surfaced so the agent knows recency. Free, no auth.',
+  'One-shot composite AI morning brief. Calls /api/today which fans out across all daily TensorFeed feeds (news, 3 paper feeds, HF models/datasets/Spaces, hot GitHub issues, Reddit threads, OpenRouter catalog summary, provider status) and returns a single synthesized text response. Optional sections filter (any subset of news, papers, hf, community, inference, status) and limit_per_section (1-10, default 3). Captured-at timestamps from each underlying snapshot are surfaced so the agent knows recency. Free, no auth.',
   {
     sections: z.array(z.enum([
       'news', 'papers', 'hf', 'community', 'inference', 'status',
@@ -1487,32 +1488,54 @@ registerTool(
     limit_per_section: z.number().min(1).max(10).optional().describe('Max items per subsection (default 3, max 10). The output is intentionally terse so an agent can call this without burning context.'),
   },
   async ({ sections, limit_per_section }) => {
-    const include = new Set(sections ?? ['news', 'papers', 'hf', 'community', 'inference', 'status']);
-    const N = Math.min(limit_per_section ?? 3, 10);
+    const params = new URLSearchParams();
+    if (sections && sections.length > 0) params.set('sections', sections.join(','));
+    if (typeof limit_per_section === 'number') params.set('limit', String(limit_per_section));
+    const path = `/today${params.toString() ? `?${params.toString()}` : ''}`;
 
-    type AnyJson = Record<string, unknown>;
-    const fetchSafely = async (path: string): Promise<AnyJson | null> => {
-      try {
-        return (await fetchJSON(path)) as AnyJson;
-      } catch (err) {
-        console.error(`get_ai_ecosystem_today: ${path} failed:`, err);
-        return null;
-      }
-    };
+    type Section<T> = { available: boolean; captured_at?: string; data: T | null };
+    type NewsItem = { title: string; source: string; url: string; publishedAt: string };
+    type AIPaperItem = { title: string; authors: string[]; venue: string | null; citationCount: number; arxivId: string | null; url: string | null };
+    type ArxivItem = { arxivId: string; title: string; authors: string[]; primaryCategory: string | null; publishedAt: string; htmlUrl: string };
+    type HFDailyItem = { paperId: string; title: string; upvotes: number; num_comments: number; hf_url: string; arxiv_url: string | null; ai_keywords: string[] };
+    type HFModel = { id: string; downloads: number; likes: number; pipeline_tag: string | null };
+    type HFDataset = { id: string; downloads: number; likes: number };
+    type HFSpace = { id: string; sdk: string | null; likes: number; runtime_stage: string | null };
+    type GitHubIssue = { title: string; repo: string; comments: number; url: string };
+    type RedditPost = { subreddit: string; title: string; score: number; num_comments: number; permalink: string };
 
-    const [
-      newsR, papersAIR, papersArxivR, papersHFR, hfR, issuesR, redditR, orR, statusR,
-    ] = await Promise.all([
-      include.has('news') ? fetchSafely(`/news?limit=${N}`) : null,
-      include.has('papers') ? fetchSafely('/papers/ai-trending') : null,
-      include.has('papers') ? fetchSafely('/papers/arxiv-recent') : null,
-      include.has('papers') ? fetchSafely('/papers/hf-daily') : null,
-      include.has('hf') ? fetchSafely('/hf/trending') : null,
-      include.has('community') ? fetchSafely('/issues/hot') : null,
-      include.has('community') ? fetchSafely('/reddit/trending') : null,
-      include.has('inference') ? fetchSafely('/openrouter/models') : null,
-      include.has('status') ? fetchSafely('/status') : null,
-    ]);
+    interface BriefShape {
+      generated_at: string;
+      news: Section<{ items: NewsItem[] }>;
+      papers: Section<{
+        ai_trending: Section<{ items: AIPaperItem[] }>;
+        arxiv_recent: Section<{ items: ArxivItem[] }>;
+        hf_daily: Section<{ items: HFDailyItem[] }>;
+      }>;
+      hf: Section<{ models: HFModel[]; datasets: HFDataset[]; spaces: HFSpace[] }>;
+      community: Section<{ github_issues: GitHubIssue[]; reddit: RedditPost[] }>;
+      inference: Section<{
+        total_models: number;
+        cheapest_input: { id: string; usd_per_million: number } | null;
+        largest_context: { id: string; tokens: number } | null;
+        free_tier_count: number;
+        top_namespaces: Array<{ namespace: string; count: number }>;
+      }>;
+      status: Section<{
+        all_operational: boolean;
+        service_count: number;
+        issues: Array<{ name: string; provider: string; status: string }>;
+      }>;
+    }
+
+    let brief: BriefShape;
+    try {
+      brief = (await fetchJSON(path)) as BriefShape;
+    } catch (err) {
+      return {
+        content: [{ type: 'text' as const, text: `Failed to fetch /api/today: ${(err as Error).message}` }],
+      };
+    }
 
     const fmtCount = (x: number): string =>
       x >= 1_000_000 ? `${(x / 1_000_000).toFixed(1)}M`
@@ -1521,112 +1544,89 @@ registerTool(
 
     const sectionTexts: string[] = [];
 
-    // News
-    if (include.has('news') && newsR) {
-      const articles = (newsR.articles as Array<{ title: string; source: string; url: string; publishedAt: string }> | undefined) ?? [];
-      if (articles.length > 0) {
-        const lines = articles.slice(0, N).map((a, i) => `  ${i + 1}. ${a.title} (${a.source})\n     ${a.url}`).join('\n');
-        sectionTexts.push(`📰 NEWS (top ${Math.min(N, articles.length)})\n${lines}`);
-      }
+    if (brief.news.available && brief.news.data && brief.news.data.items.length > 0) {
+      const lines = brief.news.data.items.map((a, i) => `  ${i + 1}. ${a.title} (${a.source})\n     ${a.url}`).join('\n');
+      sectionTexts.push(`📰 NEWS\n${lines}`);
     }
 
-    // Papers - synthesize one line per feed
-    if (include.has('papers')) {
-      const paperBits: string[] = [];
-
-      const ai = (papersAIR?.snapshot as { papers?: Array<{ title: string; authors?: string[]; venue?: string | null; citationCount?: number; arxivId?: string | null }> } | undefined);
-      if (ai?.papers && ai.papers.length > 0) {
-        const top = ai.papers.slice(0, N).map((p, i) => {
-          const authors = (p.authors ?? []).slice(0, 2).join(', ') + ((p.authors?.length ?? 0) > 2 ? ' et al.' : '');
-          const cites = typeof p.citationCount === 'number' ? `${fmtCount(p.citationCount)} citations` : '';
+    if (brief.papers.available && brief.papers.data) {
+      const bits: string[] = [];
+      const ai = brief.papers.data.ai_trending;
+      if (ai.available && ai.data && ai.data.items.length > 0) {
+        const lines = ai.data.items.map((p, i) => {
+          const authors = p.authors.slice(0, 2).join(', ') + (p.authors.length > 2 ? ' et al.' : '');
           const venue = p.venue ? ` ${p.venue}.` : '';
-          return `    ${i + 1}. ${p.title}${venue} ${authors}. ${cites}`;
+          return `    ${i + 1}. ${p.title}${venue} ${authors}. ${fmtCount(p.citationCount)} citations`;
         }).join('\n');
-        paperBits.push(`  By citation count (Semantic Scholar):\n${top}`);
+        bits.push(`  By citation count (Semantic Scholar):\n${lines}`);
       }
-
-      const recent = (papersArxivR?.snapshot as { papers?: Array<{ title: string; arxivId: string; publishedAt?: string; authors?: string[] }> } | undefined);
-      if (recent?.papers && recent.papers.length > 0) {
-        const top = recent.papers.slice(0, N).map((p, i) => {
+      const ax = brief.papers.data.arxiv_recent;
+      if (ax.available && ax.data && ax.data.items.length > 0) {
+        const lines = ax.data.items.map((p, i) => {
           const date = p.publishedAt ? p.publishedAt.slice(0, 10) : '';
-          const authors = (p.authors ?? []).slice(0, 2).join(', ') + ((p.authors?.length ?? 0) > 2 ? ' et al.' : '');
+          const authors = p.authors.slice(0, 2).join(', ') + (p.authors.length > 2 ? ' et al.' : '');
           return `    ${i + 1}. ${p.title} (arXiv:${p.arxivId}, ${date}). ${authors}`;
         }).join('\n');
-        paperBits.push(`  Just submitted (arXiv recent):\n${top}`);
+        bits.push(`  Just submitted (arXiv recent):\n${lines}`);
       }
-
-      const hfd = (papersHFR?.snapshot as { papers?: Array<{ title: string; upvotes: number; num_comments: number; hf_url: string }> } | undefined);
-      if (hfd?.papers && hfd.papers.length > 0) {
-        const top = hfd.papers.slice(0, N).map((p, i) =>
+      const hd = brief.papers.data.hf_daily;
+      if (hd.available && hd.data && hd.data.items.length > 0) {
+        const lines = hd.data.items.map((p, i) =>
           `    ${i + 1}. ${p.title} (${p.upvotes} upvotes, ${p.num_comments} comments)`,
         ).join('\n');
-        paperBits.push(`  HF editor picks today:\n${top}`);
+        bits.push(`  HF editor picks today:\n${lines}`);
       }
-
-      if (paperBits.length > 0) {
-        sectionTexts.push(`📄 PAPERS\n${paperBits.join('\n')}`);
-      }
+      if (bits.length > 0) sectionTexts.push(`📄 PAPERS\n${bits.join('\n')}`);
     }
 
-    // Hugging Face
-    if (include.has('hf') && hfR) {
-      const snap = hfR.snapshot as { models?: { items?: Array<{ id: string; downloads: number }> }; datasets?: { items?: Array<{ id: string; downloads: number }> }; spaces?: { items?: Array<{ id: string; likes: number }> } } | undefined;
+    if (brief.hf.available && brief.hf.data) {
       const bits: string[] = [];
-      const m = snap?.models?.items ?? [];
-      const d = snap?.datasets?.items ?? [];
-      const s = snap?.spaces?.items ?? [];
-      if (m.length > 0) {
-        bits.push(`  Models (top by downloads):\n` + m.slice(0, N).map((x, i) => `    ${i + 1}. ${x.id} (${fmtCount(x.downloads)} downloads)`).join('\n'));
+      const { models, datasets, spaces } = brief.hf.data;
+      if (models.length > 0) {
+        bits.push(`  Models (top by downloads):\n` + models.map((x, i) => `    ${i + 1}. ${x.id} (${fmtCount(x.downloads)} downloads)`).join('\n'));
       }
-      if (d.length > 0) {
-        bits.push(`  Datasets (top by downloads):\n` + d.slice(0, N).map((x, i) => `    ${i + 1}. ${x.id} (${fmtCount(x.downloads)} downloads)`).join('\n'));
+      if (datasets.length > 0) {
+        bits.push(`  Datasets (top by downloads):\n` + datasets.map((x, i) => `    ${i + 1}. ${x.id} (${fmtCount(x.downloads)} downloads)`).join('\n'));
       }
-      if (s.length > 0) {
-        bits.push(`  Spaces (top by likes):\n` + s.slice(0, N).map((x, i) => `    ${i + 1}. ${x.id} (${fmtCount(x.likes)} likes)`).join('\n'));
+      if (spaces.length > 0) {
+        bits.push(`  Spaces (top by likes):\n` + spaces.map((x, i) => `    ${i + 1}. ${x.id} (${fmtCount(x.likes)} likes)`).join('\n'));
       }
       if (bits.length > 0) sectionTexts.push(`🤗 HUGGING FACE\n${bits.join('\n')}`);
     }
 
-    // Community
-    if (include.has('community')) {
+    if (brief.community.available && brief.community.data) {
       const bits: string[] = [];
-      const issues = (issuesR?.snapshot as { issues?: Array<{ title: string; repo: string; comments: number; url: string }> } | undefined)?.issues ?? [];
-      if (issues.length > 0) {
-        const lines = issues.slice(0, N).map((it, i) => `    ${i + 1}. ${it.repo}: ${it.title} (${it.comments} comments)\n       ${it.url}`).join('\n');
+      const { github_issues, reddit } = brief.community.data;
+      if (github_issues.length > 0) {
+        const lines = github_issues.map((it, i) => `    ${i + 1}. ${it.repo}: ${it.title} (${it.comments} comments)\n       ${it.url}`).join('\n');
         bits.push(`  GitHub hot issues:\n${lines}`);
       }
-      const posts = (redditR?.snapshot as { posts?: Array<{ title: string; subreddit: string; score: number; num_comments: number; permalink: string }> } | undefined)?.posts ?? [];
-      if (posts.length > 0) {
-        const lines = posts.slice(0, N).map((p, i) => `    ${i + 1}. r/${p.subreddit}: ${p.title} (${p.score} pts, ${p.num_comments} comments)\n       ${p.permalink}`).join('\n');
+      if (reddit.length > 0) {
+        const lines = reddit.map((p, i) => `    ${i + 1}. r/${p.subreddit}: ${p.title} (${p.score} pts, ${p.num_comments} comments)\n       ${p.permalink}`).join('\n');
         bits.push(`  Reddit hot threads:\n${lines}`);
       }
       if (bits.length > 0) sectionTexts.push(`💬 COMMUNITY\n${bits.join('\n')}`);
     }
 
-    // Inference catalog
-    if (include.has('inference') && orR) {
-      const snap = orR.snapshot as { total_models?: number; summary?: { cheapest_input?: { id: string; usd_per_million: number } | null; largest_context?: { id: string; tokens: number } | null; free_tier_count?: number; by_namespace?: Array<{ namespace: string; count: number }> } } | undefined;
-      if (snap?.summary) {
-        const lines: string[] = [];
-        if (typeof snap.total_models === 'number') lines.push(`  ${snap.total_models} models across providers (OpenRouter)`);
-        if (snap.summary.cheapest_input) lines.push(`  Cheapest input: ${snap.summary.cheapest_input.id} at $${snap.summary.cheapest_input.usd_per_million.toFixed(2)}/Mtok`);
-        if (snap.summary.largest_context) lines.push(`  Largest context: ${snap.summary.largest_context.id} at ${fmtCount(snap.summary.largest_context.tokens)} tokens`);
-        if (typeof snap.summary.free_tier_count === 'number') lines.push(`  Free-tier models available: ${snap.summary.free_tier_count}`);
-        if (snap.summary.by_namespace && snap.summary.by_namespace.length > 0) {
-          lines.push(`  Top namespaces: ${snap.summary.by_namespace.slice(0, 5).map(n => `${n.namespace} (${n.count})`).join(', ')}`);
-        }
-        if (lines.length > 0) sectionTexts.push(`⚙️  INFERENCE CATALOG\n${lines.join('\n')}`);
+    if (brief.inference.available && brief.inference.data) {
+      const d = brief.inference.data;
+      const lines: string[] = [];
+      lines.push(`  ${d.total_models} models across providers (OpenRouter)`);
+      if (d.cheapest_input) lines.push(`  Cheapest input: ${d.cheapest_input.id} at $${d.cheapest_input.usd_per_million.toFixed(2)}/Mtok`);
+      if (d.largest_context) lines.push(`  Largest context: ${d.largest_context.id} at ${fmtCount(d.largest_context.tokens)} tokens`);
+      lines.push(`  Free-tier models available: ${d.free_tier_count}`);
+      if (d.top_namespaces.length > 0) {
+        lines.push(`  Top namespaces: ${d.top_namespaces.map(n => `${n.namespace} (${n.count})`).join(', ')}`);
       }
+      sectionTexts.push(`⚙️  INFERENCE CATALOG\n${lines.join('\n')}`);
     }
 
-    // Status
-    if (include.has('status') && statusR) {
-      const services = (statusR.services as Array<{ name: string; provider: string; status: string }> | undefined) ?? [];
-      const issues = services.filter(s => s.status !== 'operational');
-      if (issues.length === 0) {
-        sectionTexts.push(`✓  STATUS: all tracked AI providers operational (${services.length} services)`);
+    if (brief.status.available && brief.status.data) {
+      const d = brief.status.data;
+      if (d.all_operational) {
+        sectionTexts.push(`✓  STATUS: all tracked AI providers operational (${d.service_count} services)`);
       } else {
-        const lines = issues.map(s => `  ${s.name} (${s.provider}): ${s.status.toUpperCase()}`).join('\n');
+        const lines = d.issues.map(s => `  ${s.name} (${s.provider}): ${s.status.toUpperCase()}`).join('\n');
         sectionTexts.push(`⚠️  STATUS\n${lines}`);
       }
     }
@@ -1636,13 +1636,13 @@ registerTool(
         content: [
           {
             type: 'text' as const,
-            text: 'No data could be fetched right now. All upstream feeds returned empty or errored. Try again in a minute or call the underlying tools individually for diagnostic detail.',
+            text: 'No data available yet. The daily snapshots have not run, or all upstream feeds errored. Try again in a few minutes.',
           },
         ],
       };
     }
 
-    const header = `TensorFeed AI ecosystem brief, ${new Date().toISOString()}`;
+    const header = `TensorFeed AI ecosystem brief, generated ${brief.generated_at}`;
     const body = sectionTexts.join('\n\n');
     return {
       content: [
