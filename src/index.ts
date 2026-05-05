@@ -480,6 +480,52 @@ registerTool(
   },
 );
 
+// ── Tool: status_leaderboard_free (free, 7-day cap) ─────────────────
+
+registerTool(
+  'status_leaderboard_free',
+  'Cross-provider uptime leaderboard, ranked by uptime % DESC. Free, 7-day cap. Computed from minute-resolution counters (~720 samples per provider per day). For 90-day windows plus incident_count and mttr_minutes per provider use status_leaderboard (1 credit).',
+  {
+    days: z.number().min(1).max(7).optional().describe('Rolling window length 1 to 7 days (default 7)'),
+  },
+  async ({ days }) => {
+    const params = new URLSearchParams();
+    if (typeof days === 'number') params.set('days', String(days));
+    const qs = params.toString();
+    const data = (await fetchJSON(`/status/leaderboard${qs ? `?${qs}` : ''}`)) as {
+      ok: boolean;
+      error?: string;
+      message?: string;
+      range?: { from: string; to: string; days: number };
+      entry_count?: number;
+      entries?: {
+        provider: string;
+        rank: number;
+        uptime_pct: number;
+        polls: number;
+        downtime_minutes: number;
+        hard_down_minutes: number;
+      }[];
+    };
+    if (!data.ok) {
+      return {
+        content: [{ type: 'text' as const, text: `Leaderboard unavailable: ${data.error ?? 'unknown'} - ${data.message ?? ''}` }],
+      };
+    }
+    const lines = (data.entries ?? [])
+      .slice(0, 10)
+      .map((e) => `#${e.rank} ${e.provider}: ${e.uptime_pct}% (${e.downtime_minutes}m downtime, ${e.hard_down_minutes}m hard-down)`);
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `AI provider uptime leaderboard ${data.range?.from} to ${data.range?.to}\n${lines.join('\n')}`,
+        },
+      ],
+    };
+  },
+);
+
 // ── Tool: pricing_series (1 credit) ─────────────────────────────────
 
 registerTool(
@@ -598,6 +644,57 @@ registerTool(
             `  operational: ${data.days_operational}, degraded: ${data.days_degraded}, down: ${data.days_down}` +
             incidents +
             `\nCredits remaining: ${data.billing?.credits_remaining ?? '?'}`,
+        },
+      ],
+    };
+  },
+);
+
+// ── Tool: status_leaderboard (1 credit) ─────────────────────────────
+
+registerTool(
+  'status_leaderboard',
+  'Cross-provider uptime leaderboard for a custom date range up to 90 days. Same minute-resolution counter source as status_leaderboard_free, but adds incident_count and mttr_minutes (mean time to recover) per provider. Sorted by uptime % DESC. Costs 1 credit.',
+  {
+    from: z.string().optional().describe('Start date YYYY-MM-DD UTC (default: 30 days ago)'),
+    to: z.string().optional().describe('End date YYYY-MM-DD UTC (default: today)'),
+  },
+  async ({ from, to }) => {
+    const params = new URLSearchParams();
+    if (from) params.set('from', from);
+    if (to) params.set('to', to);
+    const data = (await fetchJSON(`/premium/status/leaderboard?${params}`, { auth: true })) as {
+      ok: boolean;
+      error?: string;
+      message?: string;
+      range?: { from: string; to: string; days: number };
+      entries?: {
+        provider: string;
+        rank: number;
+        uptime_pct: number;
+        polls: number;
+        downtime_minutes: number;
+        hard_down_minutes: number;
+        incident_count?: number;
+        mttr_minutes?: number | null;
+      }[];
+      billing?: { credits_remaining?: number };
+    };
+    if (!data.ok) {
+      return {
+        content: [{ type: 'text' as const, text: `Leaderboard unavailable: ${data.error ?? 'unknown'} - ${data.message ?? ''}` }],
+      };
+    }
+    const lines = (data.entries ?? []).map(
+      (e) =>
+        `#${e.rank} ${e.provider}: ${e.uptime_pct}% uptime, ${e.downtime_minutes}m downtime (${e.hard_down_minutes}m hard-down), ${e.incident_count ?? 0} incidents, MTTR ${e.mttr_minutes ?? 'n/a'}m`,
+    );
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text:
+            `AI provider uptime leaderboard ${data.range?.from} to ${data.range?.to}\n${lines.join('\n')}\n\nCredits remaining: ${data.billing?.credits_remaining ?? '?'}`,
         },
       ],
     };

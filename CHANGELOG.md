@@ -2,6 +2,12 @@
 
 All notable changes to the [TensorFeed.ai MCP server](https://github.com/RipperMercs/tensorfeed-mcp). Free tools work without configuration; premium tools require a bearer token via the `TENSORFEED_TOKEN` env var. Buy credits at [tensorfeed.ai/developers/agent-payments](https://tensorfeed.ai/developers/agent-payments).
 
+## 1.22.0 - 2026-05-04
+
+### Added
+- Cross-provider uptime leaderboard tools: `status_leaderboard_free` (free, 7-day cap) and `status_leaderboard` (premium, 1 credit, up to 90 days). Returns providers ranked by uptime % DESC computed from minute-resolution counters (~720 samples per provider per day at the 2-min poll cadence). Premium adds `incident_count` and `mttr_minutes` (mean time to recover) per provider. Aimed at SRE/ops/procurement teams comparing AI vendor reliability for vendor selection or post-incident reviews.
+- 4 new monitored providers behind every status tool: Google Gemini (via Google Cloud incidents), GitHub Copilot, Perplexity (via Instatus), and Groq. Brings total monitored to 10 major LLM providers.
+
 ## 1.21.0 - 2026-05-04
 
 ### Added
