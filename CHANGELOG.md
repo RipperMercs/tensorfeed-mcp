@@ -2,6 +2,11 @@
 
 All notable changes to the [TensorFeed.ai MCP server](https://github.com/RipperMercs/tensorfeed-mcp). Free tools work without configuration; premium tools require a bearer token via the `TENSORFEED_TOKEN` env var. Buy credits at [tensorfeed.ai/developers/agent-payments](https://tensorfeed.ai/developers/agent-payments).
 
+## 1.21.0 - 2026-05-04
+
+### Added
+- Three free history-series tools: `pricing_series_free`, `benchmark_series_free`, `status_uptime_free`. Each returns up to 7 days of daily snapshots (price/score/uptime) for one model or provider. Max range capped at 7 days; for the full 90-day window keep using the paid `pricing_series`, `benchmark_series`, `status_uptime` tools (1 credit each). Reason for the split: agents discovering the data need a free way to see "yes, TensorFeed actually has historical pricing for this model" before deciding to spend a credit. The 7-day teaser shows the trend without giving away the long tail.
+
 ## 1.20.0 - 2026-05-04
 
 ### Changed

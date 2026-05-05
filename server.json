@@ -14,7 +14,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@tensorfeed/mcp-server",
-      "version": "1.20.0",
+      "version": "1.21.0",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"
@@ -52,7 +52,10 @@
         "get_reddit_trending",
         "get_openrouter_models",
         "get_hf_daily_papers",
-        "get_ai_ecosystem_today"
+        "get_ai_ecosystem_today",
+        "pricing_series_free",
+        "benchmark_series_free",
+        "status_uptime_free"
       ],
       "premiumTools": [
         "premium_routing",

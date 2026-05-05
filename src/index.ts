@@ -6,7 +6,7 @@ import { z, ZodRawShape } from 'zod';
 import { sanitizeToolResponse } from './sanitize.js';
 
 const API_BASE = 'https://tensorfeed.ai/api';
-const SDK_VERSION = '1.9.0';
+const SDK_VERSION = '1.10.0';
 
 // ── API helpers ─────────────────────────────────────────────────────
 
@@ -372,6 +372,111 @@ registerTool(
       ? `\n\nCharged ${data.billing.credits_charged} credit. Remaining: ${data.billing.credits_remaining}.`
       : '';
     return { content: [{ type: 'text' as const, text: `Routing for "${data.task}":\n\n${list}${billing}` }] };
+  },
+);
+
+// ── Tool: pricing_series_free (free, 7-day cap) ─────────────────────
+
+registerTool(
+  'pricing_series_free',
+  'Daily price points for one AI model over the last 1 to 7 days, free. For windows up to 90 days use pricing_series (1 credit).',
+  {
+    model: z.string().describe('Model id or display name (e.g. "Claude Opus 4.7" or "claude-opus-4-7")'),
+    days: z.number().min(1).max(7).optional().describe('Rolling window length 1 to 7 days (default 7)'),
+  },
+  async ({ model, days }) => {
+    const params = new URLSearchParams({ model });
+    if (typeof days === 'number') params.set('days', String(days));
+    const data = (await fetchJSON(`/history/pricing/series?${params}`)) as {
+      model: string;
+      provider: string | null;
+      points: { date: string; input: number; output: number; blended: number }[];
+      summary: {
+        first: { date: string; blended: number } | null;
+        latest: { date: string; blended: number } | null;
+        min_blended: number | null;
+        max_blended: number | null;
+        delta_pct_blended: number | null;
+        days_with_data: number;
+      };
+    };
+    const s = data.summary;
+    const summary = s.first && s.latest
+      ? `${s.first.date} blended $${s.first.blended} -> ${s.latest.date} blended $${s.latest.blended} (${s.delta_pct_blended}%, min $${s.min_blended}, max $${s.max_blended})`
+      : 'no data points in range';
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `${data.model} (${data.provider ?? 'unknown'}) ${data.points.length} points over ${data.points.length} days\n${summary}\nFor up to 90 days, use the pricing_series tool (1 credit).`,
+        },
+      ],
+    };
+  },
+);
+
+// ── Tool: benchmark_series_free (free, 7-day cap) ───────────────────
+
+registerTool(
+  'benchmark_series_free',
+  'Daily benchmark scores for one model+benchmark over the last 1 to 7 days, free. Benchmark keys: swe_bench, mmlu_pro, gpqa_diamond, math, human_eval. For windows up to 90 days use benchmark_series (1 credit).',
+  {
+    model: z.string().describe('Model id or display name'),
+    benchmark: z.string().describe('Benchmark key'),
+    days: z.number().min(1).max(7).optional().describe('Rolling window length 1 to 7 days (default 7)'),
+  },
+  async ({ model, benchmark, days }) => {
+    const params = new URLSearchParams({ model, benchmark });
+    if (typeof days === 'number') params.set('days', String(days));
+    const data = (await fetchJSON(`/history/benchmarks/series?${params}`)) as {
+      model: string;
+      benchmark: string;
+      points: { date: string; score: number }[];
+      summary: { first: { date: string; score: number } | null; latest: { date: string; score: number } | null; delta_pp: number | null };
+    };
+    const s = data.summary;
+    const summary = s.first && s.latest
+      ? `${s.first.date} score ${s.first.score} -> ${s.latest.date} score ${s.latest.score} (delta ${s.delta_pp} pp)`
+      : 'no data in range';
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `${data.model} on ${data.benchmark}: ${data.points.length} points\n${summary}`,
+        },
+      ],
+    };
+  },
+);
+
+// ── Tool: status_uptime_free (free, 7-day cap) ──────────────────────
+
+registerTool(
+  'status_uptime_free',
+  'Daily uptime rollup for one provider over the last 1 to 7 days, free. For windows up to 90 days use status_uptime (1 credit).',
+  {
+    provider: z.string().describe('Provider name (e.g. anthropic, openai, google)'),
+    days: z.number().min(1).max(7).optional().describe('Rolling window length 1 to 7 days (default 7)'),
+  },
+  async ({ provider, days }) => {
+    const params = new URLSearchParams({ provider });
+    if (typeof days === 'number') params.set('days', String(days));
+    const data = (await fetchJSON(`/history/status/uptime?${params}`)) as {
+      provider: string;
+      days_total: number;
+      days_operational: number;
+      days_degraded: number;
+      days_down: number;
+      uptime_pct: number | null;
+    };
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `${data.provider} over ${data.days_total} days: ${data.uptime_pct ?? '?'}% uptime (${data.days_operational} operational, ${data.days_degraded} degraded, ${data.days_down} down)`,
+        },
+      ],
+    };
   },
 );
 
