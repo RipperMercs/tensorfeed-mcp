@@ -1131,6 +1131,42 @@ registerTool(
   },
 );
 
+// ── Tool: create_leaderboard_rank_watch (1 credit) ──────────────────
+
+registerTool(
+  'create_leaderboard_rank_watch',
+  'Register a webhook that fires when a provider crosses a rank threshold on the cross-provider 7-day uptime leaderboard. Rank 1 = best (highest uptime). drops_below: was rank<=N, now rank>N (got worse). rises_above: was rank>=N, now rank<N (got better). changes: any rank movement. Costs 1 credit at registration. Watch lives 90 days.',
+  {
+    provider: z.string().describe('Provider name or slug (case-insensitive). e.g. claude, openai, gemini, bedrock, azure'),
+    op: z.enum(['drops_below', 'rises_above', 'changes']).describe('Trigger condition'),
+    threshold: z.number().int().min(1).optional().describe('Required for drops_below / rises_above. Integer rank position.'),
+    callback_url: z.string().describe('HTTPS URL to POST to when the watch fires'),
+    secret: z.string().optional().describe('Optional HMAC shared secret'),
+  },
+  async ({ provider, op, threshold, callback_url, secret }) => {
+    const spec: Record<string, unknown> = { type: 'leaderboard_rank', provider, op };
+    if (threshold !== undefined) spec.threshold = threshold;
+    const body: Record<string, unknown> = { spec, callback_url };
+    if (secret !== undefined) body.secret = secret;
+    const data = (await fetchJSON('/premium/watches', { method: 'POST', body, auth: true })) as {
+      watch: { id: string; expires_at: string };
+      billing?: { credits_remaining?: number };
+    };
+    const desc =
+      op === 'changes'
+        ? `${provider} rank changes`
+        : `${provider} ${op.replace('_', ' ')} #${threshold}`;
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Created leaderboard rank watch ${data.watch.id} (${desc}). Expires ${data.watch.expires_at}. Credits remaining: ${data.billing?.credits_remaining ?? '?'}`,
+        },
+      ],
+    };
+  },
+);
+
 // ── Tool: delete_watch ──────────────────────────────────────────────
 
 registerTool(

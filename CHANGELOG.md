@@ -2,6 +2,12 @@
 
 All notable changes to the [TensorFeed.ai MCP server](https://github.com/RipperMercs/tensorfeed-mcp). Free tools work without configuration; premium tools require a bearer token via the `TENSORFEED_TOKEN` env var. Buy credits at [tensorfeed.ai/developers/agent-payments](https://tensorfeed.ai/developers/agent-payments).
 
+## 1.23.0 - 2026-05-05
+
+### Added
+- `create_leaderboard_rank_watch` tool. Premium webhook watch (1 credit) fires when a provider crosses a rank threshold on the cross-provider 7-day uptime leaderboard. Operations: `drops_below`, `rises_above`, `changes`. Use case: SRE / vendor-management teams want a notification when their primary AI provider's relative reliability shifts.
+- 5 additional providers covered by every status tool: OpenRouter, ElevenLabs, Stability AI, Runway, Luma. Brings total monitored to 20.
+
 ## 1.22.0 - 2026-05-04
 
 ### Added
