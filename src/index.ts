@@ -1408,7 +1408,7 @@ registerTool(
         {
           type: 'text' as const,
           text:
-            `MCP Server Registry — ${s.date}\n` +
+            `MCP Server Registry, ${s.date}\n` +
             `Total servers: ${s.total_servers} (across ${s.total_versions} versioned entries)\n` +
             `Status: ${statusLine}\n${delta}\n\n` +
             `Top namespaces:\n${topNs}` +
