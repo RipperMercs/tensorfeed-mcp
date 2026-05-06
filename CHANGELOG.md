@@ -2,6 +2,11 @@
 
 All notable changes to the [TensorFeed.ai MCP server](https://github.com/RipperMercs/tensorfeed-mcp). Free tools work without configuration; premium tools require a bearer token via the `TENSORFEED_TOKEN` env var. Buy credits at [tensorfeed.ai/developers/agent-payments](https://tensorfeed.ai/developers/agent-payments).
 
+## 1.24.0 - 2026-05-06
+
+### Added
+- `get_model_deprecations` tool (free). Wraps the new `/api/model-deprecations` endpoint. Returns the provider-by-provider model retirement and deprecation calendar with announced / deprecation / sunset dates, recommended replacement model id, and a source URL pointing at the provider's own announcement. Optional `provider` and `status` filters. Agents that depend on a specific model id can now ask one question and learn whether the model will keep accepting traffic and, if not, what to migrate to. Closes the most-frequent agent-operator surprise in the production lifecycle.
+
 ## 1.23.0 - 2026-05-05
 
 ### Added

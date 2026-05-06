@@ -211,6 +211,91 @@ registerTool(
   }
 );
 
+// ── Tool: get_model_deprecations ────────────────────────────────────
+
+registerTool(
+  'get_model_deprecations',
+  "Get the AI model deprecation calendar. Provider-by-provider registry of model retirements and deprecation announcements (OpenAI, Anthropic, Google, Cohere, and others). Each entry carries the announced/deprecation/sunset dates, the recommended replacement model, and a source URL pointing at the provider's own announcement. Useful for agents who need to know when a model they depend on will stop accepting traffic and what to migrate to.",
+  {
+    provider: z
+      .string()
+      .optional()
+      .describe('Filter to a single provider (e.g. "OpenAI", "Anthropic", "Google", "Cohere"). Case-insensitive.'),
+    status: z
+      .enum(['announced', 'deprecated', 'sunsetted'])
+      .optional()
+      .describe('Filter by lifecycle stage. announced = deprecation announced but model still serves at full capacity; deprecated = past deprecation date, migration required; sunsetted = no longer accepts traffic.'),
+  },
+  async ({ provider, status }) => {
+    const params = new URLSearchParams();
+    if (provider) params.set('provider', provider);
+    if (status) params.set('status', status);
+    const qs = params.toString();
+    const data = await fetchJSON(`/model-deprecations${qs ? `?${qs}` : ''}`) as {
+      lastUpdated?: string;
+      count?: number;
+      deprecations?: {
+        provider: string;
+        model: string;
+        modelDisplay?: string;
+        status: 'announced' | 'deprecated' | 'sunsetted';
+        announcedDate?: string;
+        deprecationDate?: string;
+        sunsetDate?: string;
+        replacement?: string;
+        notes?: string;
+        sourceUrl: string;
+      }[];
+    };
+
+    const entries = data.deprecations ?? [];
+    if (entries.length === 0) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text:
+              'No model deprecations matched the filter. The full calendar is at https://tensorfeed.ai/model-deprecations.',
+          },
+        ],
+      };
+    }
+
+    // Group by provider for readable output.
+    const byProvider = new Map<string, typeof entries>();
+    for (const d of entries) {
+      const list = byProvider.get(d.provider) ?? [];
+      list.push(d);
+      byProvider.set(d.provider, list);
+    }
+
+    const sections = Array.from(byProvider.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([prov, list]) => {
+        const rows = list
+          .map(d => {
+            const dates = [
+              d.announcedDate ? `announced ${d.announcedDate}` : null,
+              d.deprecationDate ? `deprecated ${d.deprecationDate}` : null,
+              d.sunsetDate ? `sunset ${d.sunsetDate}` : null,
+            ]
+              .filter(Boolean)
+              .join(', ');
+            const display = d.modelDisplay ? ` (${d.modelDisplay})` : '';
+            const repl = d.replacement ? `\n     replacement: ${d.replacement}` : '';
+            const note = d.notes ? `\n     note: ${d.notes}` : '';
+            return `  ${d.model}${display} [${d.status.toUpperCase()}]\n     ${dates}${repl}${note}\n     source: ${d.sourceUrl}`;
+          })
+          .join('\n');
+        return `${prov}:\n${rows}`;
+      })
+      .join('\n\n');
+
+    const header = `AI Model Deprecation Calendar (${entries.length} ${entries.length === 1 ? 'entry' : 'entries'}, last updated ${data.lastUpdated ?? 'recently'}):\n\n`;
+    return { content: [{ type: 'text' as const, text: header + sections }] };
+  }
+);
+
 // ── Tool: get_ai_today ──────────────────────────────────────────────
 
 registerTool(
