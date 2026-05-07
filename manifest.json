@@ -1,0 +1,59 @@
+{
+  "$schema": "https://raw.githubusercontent.com/anthropics/mcpb/main/schemas/mcpb-manifest-latest.schema.json",
+  "manifest_version": "0.3",
+  "name": "tensorfeed",
+  "display_name": "TensorFeed",
+  "version": "1.24.0",
+  "description": "Real-time AI ecosystem data: news, model pricing, service status, MCP registry, GitHub trending, AI papers.",
+  "long_description": "TensorFeed gives Claude live, machine-readable insight into the AI industry. 42 tools across two tiers.\n\nFree tier (no key, no payment): AI news from 50+ sources, current model pricing across labs, AI service status with 2-minute polling and downtime detection, model deprecation tracking, MCP registry snapshots, GitHub/npm/PyPI trending, arXiv + Semantic Scholar + Hugging Face daily papers, Reddit AI threads, the daily AI ecosystem brief.\n\nPremium tier (USDC on Base via x402, 1-3 credits per call): smart routing recommendations, multi-day pricing/benchmark/status/uptime time series, leaderboard rankings, agents directory, what's-new digest, model comparison, provider deep-dives, news search, cost projection, webhook watches with daily/weekly digests, latency probe history, MCP registry growth series.\n\nCovered by AFTA, an open standard for fair-trade agent APIs: every paid call returns an Ed25519-signed receipt, and code-enforced no-charge paths protect the agent from being billed for upstream errors. Welcome bonus of 50 free credits on first wallet payment, no accounts.",
+  "author": {
+    "name": "TensorFeed.ai",
+    "url": "https://tensorfeed.ai"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/RipperMercs/tensorfeed-mcp"
+  },
+  "homepage": "https://tensorfeed.ai/developers",
+  "documentation": "https://tensorfeed.ai/developers/agent-payments",
+  "support": "https://github.com/RipperMercs/tensorfeed-mcp/issues",
+  "icon": "icon.png",
+  "server": {
+    "type": "node",
+    "entry_point": "dist/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": [
+        "${__dirname}/dist/index.js"
+      ],
+      "env": {}
+    }
+  },
+  "tools_generated": true,
+  "keywords": [
+    "ai-news",
+    "model-pricing",
+    "service-status",
+    "mcp-registry",
+    "ai-papers",
+    "agent-payments",
+    "x402",
+    "usdc",
+    "base",
+    "afta"
+  ],
+  "license": "MIT",
+  "privacy_policies": [
+    "https://tensorfeed.ai/privacy"
+  ],
+  "compatibility": {
+    "platforms": [
+      "darwin",
+      "win32",
+      "linux"
+    ],
+    "runtimes": {
+      "node": ">=18.0.0"
+    }
+  }
+}
