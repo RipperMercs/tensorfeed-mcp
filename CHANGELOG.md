@@ -2,6 +2,11 @@
 
 All notable changes to the [TensorFeed.ai MCP server](https://github.com/RipperMercs/tensorfeed-mcp). Free tools work without configuration; premium tools require a bearer token via the `TENSORFEED_TOKEN` env var. Buy credits at [tensorfeed.ai/developers/agent-payments](https://tensorfeed.ai/developers/agent-payments).
 
+## 1.25.0 - 2026-05-06
+
+### Added
+- Tool annotations on every registered tool (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`). All `get_*`, `*_series`, `*_search`, `compare_*`, `provider_deepdive`, `cost_projection`, `whats_new`, `*_snapshot`, `probe_*`, `list_watches`, `premium_routing`, and `premium_agents_directory` tools are flagged read-only + idempotent + open-world. The four `create_*_watch` tools are flagged write + non-idempotent. `delete_watch` is flagged destructive + idempotent. Hosts and clients can now decide whether a tool is safe to batch, retry, or call autonomously without re-prompting the user. Required by the Anthropic Connectors Directory.
+
 ## 1.24.0 - 2026-05-06
 
 ### Added

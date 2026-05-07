@@ -2,6 +2,7 @@
 
 import { McpServer, ToolCallback } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import { z, ZodRawShape } from 'zod';
 import { sanitizeToolResponse } from './sanitize.js';
 
@@ -76,11 +77,43 @@ const server = new McpServer({
 // drift between worker rules and what the MCP server should consider
 // safe. See ./sanitize.ts.
 
+// MCP tool annotation presets. These are HINTS for hosts/clients and agents
+// so they can decide whether a tool is safe to call autonomously, batch, or
+// retry. Required by the Anthropic Connectors Directory and used by client
+// tool-pickers. See https://modelcontextprotocol.io/specification#tool-annotations
+//
+//   readOnlyHint:    true if the tool only reads, no side effects on the world
+//   destructiveHint: true if the tool may delete/destroy data
+//   idempotentHint:  true if calling twice has the same effect as once
+//   openWorldHint:   true if the tool interacts with external systems (HTTP/APIs)
+//
+// All TensorFeed tools hit the tensorfeed.ai HTTP API, so openWorldHint is
+// always true here.
+const READ_TOOL: ToolAnnotations = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: true,
+};
+const CREATE_TOOL: ToolAnnotations = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: false,
+  openWorldHint: true,
+};
+const DELETE_TOOL: ToolAnnotations = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: true,
+  openWorldHint: true,
+};
+
 function registerTool<Args extends ZodRawShape>(
   name: string,
   description: string,
   paramsSchema: Args,
   cb: ToolCallback<Args>,
+  annotations: ToolAnnotations = READ_TOOL,
 ) {
   const wrapped = (async (args: unknown, extra: unknown) => {
     const result = await (cb as (a: unknown, e: unknown) => unknown)(args, extra);
@@ -88,7 +121,7 @@ function registerTool<Args extends ZodRawShape>(
   }) as ToolCallback<Args>;
   // Direct dispatch to the SDK's underlying registration. Do not call
   // registerTool() here or it will recurse forever.
-  return server.tool(name, description, paramsSchema, wrapped);
+  return server.tool(name, description, paramsSchema, annotations, wrapped);
 }
 
 // ── Tool: get_ai_news ───────────────────────────────────────────────
@@ -1150,6 +1183,7 @@ registerTool(
       ],
     };
   },
+  CREATE_TOOL,
 );
 
 // ── Tool: create_status_watch (1 credit) ────────────────────────────
@@ -1183,6 +1217,7 @@ registerTool(
       ],
     };
   },
+  CREATE_TOOL,
 );
 
 // ── Tool: create_digest_watch (1 credit) ────────────────────────────
@@ -1214,6 +1249,7 @@ registerTool(
       ],
     };
   },
+  CREATE_TOOL,
 );
 
 // ── Tool: create_leaderboard_rank_watch (1 credit) ──────────────────
@@ -1250,6 +1286,7 @@ registerTool(
       ],
     };
   },
+  CREATE_TOOL,
 );
 
 // ── Tool: delete_watch ──────────────────────────────────────────────
@@ -1264,6 +1301,7 @@ registerTool(
     await fetchJSON(`/premium/watches/${watch_id}`, { method: 'DELETE', auth: true });
     return { content: [{ type: 'text' as const, text: `Deleted watch ${watch_id}.` }] };
   },
+  DELETE_TOOL,
 );
 
 // ── Tool: probe_latest (free) ───────────────────────────────────────
