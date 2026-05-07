@@ -4,10 +4,15 @@ import { McpServer, ToolCallback } from '@modelcontextprotocol/sdk/server/mcp.js
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import { z, ZodRawShape } from 'zod';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { sanitizeToolResponse } from './sanitize.js';
 
 const API_BASE = 'https://tensorfeed.ai/api';
-const SDK_VERSION = '1.10.0';
+
+const pkgPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json');
+const SDK_VERSION = (JSON.parse(readFileSync(pkgPath, 'utf-8')) as { version: string }).version;
 
 // ── API helpers ─────────────────────────────────────────────────────
 

@@ -2,6 +2,11 @@
 
 All notable changes to the [TensorFeed.ai MCP server](https://github.com/RipperMercs/tensorfeed-mcp). Free tools work without configuration; premium tools require a bearer token via the `TENSORFEED_TOKEN` env var. Buy credits at [tensorfeed.ai/developers/agent-payments](https://tensorfeed.ai/developers/agent-payments).
 
+## 1.25.1 - 2026-05-07
+
+### Fixed
+- `serverInfo.version` reported over the MCP `initialize` response was hardcoded to `1.10.0` and went stale through several releases. Version now reads from `package.json` at startup, so it can never drift again. Same constant feeds the outgoing `User-Agent` header on TensorFeed API calls. No behavior change for tools or transport.
+
 ## 1.25.0 - 2026-05-06
 
 ### Added
