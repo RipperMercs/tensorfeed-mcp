@@ -2,6 +2,11 @@
 
 All notable changes to the [TensorFeed.ai MCP server](https://github.com/RipperMercs/tensorfeed-mcp). Free tools work without configuration; premium tools require a bearer token via the `TENSORFEED_TOKEN` env var. Buy credits at [tensorfeed.ai/developers/agent-payments](https://tensorfeed.ai/developers/agent-payments).
 
+## 1.26.0 - 2026-05-09
+
+### Added
+- `remotes` array on `server.json` advertising the hosted Streamable HTTP MCP variant at `https://tensorfeed.ai/api/mcp`. The official MCP Registry can now route MCP-aware clients (Claude Code, Cursor, Codex, anything spec-compliant) to the hosted server directly, with no install step. The existing `packages` array (npm stdio at `@tensorfeed/mcp-server`) coexists, so clients can still pick the local-stdio path. After publish via `mcp-publisher`, the `ai.tensorfeed/mcp-server` registry entry will surface both transports for the same server.
+
 ## 1.25.1 - 2026-05-07
 
 ### Fixed

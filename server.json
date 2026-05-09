@@ -3,18 +3,24 @@
   "name": "ai.tensorfeed/mcp-server",
   "title": "TensorFeed",
   "description": "AI news, model pricing, service status, and machine-payable premium tools. AFTA-certified.",
-  "version": "1.25.1",
+  "version": "1.26.0",
   "websiteUrl": "https://tensorfeed.ai/developers/agent-payments",
   "repository": {
     "url": "https://github.com/RipperMercs/tensorfeed-mcp",
     "source": "github"
   },
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://tensorfeed.ai/api/mcp"
+    }
+  ],
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@tensorfeed/mcp-server",
-      "version": "1.25.1",
+      "version": "1.26.0",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"
