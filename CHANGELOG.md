@@ -2,6 +2,15 @@
 
 All notable changes to the [TensorFeed.ai MCP server](https://github.com/RipperMercs/tensorfeed-mcp). Free tools work without configuration; premium tools require a bearer token via the `TENSORFEED_TOKEN` env var. Buy credits at [tensorfeed.ai/developers/agent-payments](https://tensorfeed.ai/developers/agent-payments).
 
+## 1.27.0 - 2026-05-09
+
+### Added
+- `get_recent_earthquakes` (free): wraps `/api/climate/earthquakes`. USGS Earthquake Hazards Program pre-built summary feeds. Magnitude bucket (significant | 4.5 | 2.5 | 1.0 | all) crossed with period (hour | day | week | month). Returns id, magnitude, place, time, depth, lat/lon, tsunami flag, USGS detail URL. License: US Government public domain (17 USC §105).
+- `get_weather_alerts` (free, US-only): wraps `/api/climate/weather-alerts`. NWS Active Weather Alerts. Filter by 2-letter state, exact NWS event name, severity, urgency, status. Returns flattened alerts list with effective/expires windows and the canonical NWS web URL. License: US Government public domain.
+- `get_agent_opportunities` (free): wraps `/api/agents/opportunities`. Daily 13:30 UTC scan of new repositories across the AI agent ecosystem (Anthropic / OpenAI / Microsoft / ModelContextProtocol / HuggingFace / LangChain / frontier-lab orgs plus MCP, x402, agent-skills keyword sweeps and a vertical-pattern catch). Eleven signals deduped + composite-scored with per-signal MIN/MAX caps so smaller signals are never starved. Optional `signal` filter to one source.
+
+Tool count: 42 -> 45. Brings the stdio package up to parity with the new public-domain feeds and the daily agent-ecosystem scan that landed on the hosted HTTP transport this same day.
+
 ## 1.26.0 - 2026-05-09
 
 ### Added

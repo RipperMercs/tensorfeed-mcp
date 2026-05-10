@@ -1837,6 +1837,138 @@ registerTool(
 );
 
 // ── Tool: get_ai_ecosystem_today (free, composite) ──────────────────
+// ── Tool: get_recent_earthquakes (free) ─────────────────────────────
+
+registerTool(
+  'get_recent_earthquakes',
+  "Recent earthquakes from the USGS Earthquake Hazards Program pre-built summary feeds. Choose a magnitude bucket (significant | 4.5 | 2.5 | 1.0 | all) and a time window (hour | day | week | month). Returns id, magnitude, place, time (ISO 8601), depth_km, longitude, latitude, tsunami flag, USGS detail URL. Upstream feeds refresh every minute. License: US Government public domain (17 USC §105). Free, no auth.",
+  {
+    magnitude: z.enum(['significant', '4.5', '2.5', '1.0', 'all']).optional().describe('Magnitude bucket (default 4.5)'),
+    period: z.enum(['hour', 'day', 'week', 'month']).optional().describe('Time window (default day)'),
+    limit: z.number().min(1).max(50).optional().describe('Max earthquakes to render (default 15, max 50). Worker accepts up to 500 but text rendering caps lower.'),
+  },
+  async ({ magnitude, period, limit }) => {
+    const params = new URLSearchParams();
+    params.set('magnitude', magnitude ?? '4.5');
+    params.set('period', period ?? 'day');
+    params.set('limit', String(Math.min(limit ?? 15, 50)));
+    const data = (await fetchJSON(`/climate/earthquakes?${params}`)) as {
+      ok: boolean;
+      query?: { magnitude: string; period: string; limit: number };
+      feed_metadata?: { title: string | null; generated: string | null; upstream_count: number };
+      earthquakes?: { id: string; magnitude: number | null; place: string | null; time: string | null; depth_km: number | null; latitude: number | null; longitude: number | null; tsunami: boolean; url: string | null }[];
+      error?: string;
+    };
+    if (!data.ok || !data.earthquakes) {
+      return { content: [{ type: 'text' as const, text: `USGS earthquakes unavailable: ${data.error ?? 'unknown error'}` }] };
+    }
+    const eqs = data.earthquakes;
+    const lines = eqs.map((q, i) => {
+      const mag = q.magnitude !== null ? `M${q.magnitude.toFixed(1)}` : 'M?';
+      const tsu = q.tsunami ? ' [tsunami flag]' : '';
+      const time = q.time ? q.time.slice(0, 19).replace('T', ' ') + ' UTC' : 'unknown time';
+      const depth = q.depth_km !== null ? `${q.depth_km.toFixed(0)}km deep` : 'depth unknown';
+      const coords = q.latitude !== null && q.longitude !== null ? ` (${q.latitude.toFixed(2)}, ${q.longitude.toFixed(2)})` : '';
+      return `${i + 1}. ${mag}  ${q.place ?? 'location unknown'}${coords}\n     ${time}, ${depth}${tsu}\n     ${q.url ?? ''}`;
+    }).join('\n\n');
+    const meta = data.feed_metadata;
+    const header = `USGS earthquakes (${data.query?.magnitude ?? '?'} / ${data.query?.period ?? '?'}). ${eqs.length} of ${meta?.upstream_count ?? '?'} returned.`;
+    return { content: [{ type: 'text' as const, text: `${header}\n\n${lines || '  (no events in this window)'}\n\nSource: USGS Earthquake Hazards Program. Public domain (17 USC §105).` }] };
+  },
+);
+
+// ── Tool: get_weather_alerts (free, US only) ────────────────────────
+
+registerTool(
+  'get_weather_alerts',
+  "Active US weather alerts from the National Weather Service. US-only. Filter by 2-letter state code (area), exact NWS event name, severity, urgency, status. Returns id, event, severity, urgency, headline, description, areaDesc, sent/effective/expires/ends, sender_name, web URL. Active alerts only — expired alerts fall off the upstream feed automatically. License: US Government public domain. Free, no auth.",
+  {
+    area: z.string().regex(/^[A-Za-z]{2}$/).optional().describe('2-letter US state or territory code (CA, TX, PR, etc)'),
+    event: z.string().optional().describe('Exact NWS event name (e.g. "Tornado Warning", "Heat Advisory")'),
+    severity: z.enum(['Extreme', 'Severe', 'Moderate', 'Minor', 'Unknown']).optional().describe('Severity filter'),
+    urgency: z.enum(['Immediate', 'Expected', 'Future', 'Past', 'Unknown']).optional().describe('Urgency filter'),
+    status: z.enum(['actual', 'exercise', 'system', 'test', 'draft']).optional().describe('Status filter (default actual unfiltered)'),
+    limit: z.number().min(1).max(50).optional().describe('Max alerts to render (default 15, max 50). Worker accepts up to 500 but text rendering caps lower.'),
+  },
+  async ({ area, event, severity, urgency, status, limit }) => {
+    const params = new URLSearchParams();
+    if (area) params.set('area', area.toUpperCase());
+    if (event) params.set('event', event);
+    if (severity) params.set('severity', severity);
+    if (urgency) params.set('urgency', urgency);
+    if (status) params.set('status', status);
+    params.set('limit', String(Math.min(limit ?? 15, 50)));
+    const data = (await fetchJSON(`/climate/weather-alerts?${params}`)) as {
+      ok: boolean;
+      query?: { area: string | null; event: string | null; severity: string | null; urgency: string | null; status: string | null };
+      feed_metadata?: { title: string | null; updated: string | null; upstream_count: number };
+      alerts?: { id: string; event: string | null; severity: string | null; urgency: string | null; headline: string | null; area_desc: string | null; effective: string | null; expires: string | null; sender_name: string | null; web: string | null }[];
+      error?: string;
+    };
+    if (!data.ok || !data.alerts) {
+      return { content: [{ type: 'text' as const, text: `NWS weather alerts unavailable: ${data.error ?? 'unknown error'}` }] };
+    }
+    const alerts = data.alerts;
+    const lines = alerts.map((a, i) => {
+      const ev = a.event ?? 'unknown event';
+      const sev = a.severity ? `[${a.severity}]` : '';
+      const eff = a.effective ? a.effective.slice(0, 19).replace('T', ' ') + ' UTC' : '';
+      const exp = a.expires ? a.expires.slice(0, 19).replace('T', ' ') + ' UTC' : 'no expiry';
+      return `${i + 1}. ${sev} ${ev}\n     Where: ${a.area_desc ?? 'unspecified'}\n     ${a.headline ?? ''}\n     Effective: ${eff} → ${exp}\n     ${a.web ?? ''}`;
+    }).join('\n\n');
+    const filters: string[] = [];
+    if (area) filters.push(`area=${area.toUpperCase()}`);
+    if (event) filters.push(`event=${event}`);
+    if (severity) filters.push(`severity=${severity}`);
+    const filterText = filters.length > 0 ? ` (${filters.join(', ')})` : '';
+    const header = `NWS active US weather alerts${filterText}. ${alerts.length} of ${data.feed_metadata?.upstream_count ?? '?'} returned.`;
+    return { content: [{ type: 'text' as const, text: `${header}\n\n${lines || '  (no active alerts matching filters)'}\n\nSource: api.weather.gov. Public domain (17 USC §105). US-only coverage.` }] };
+  },
+);
+
+// ── Tool: get_agent_opportunities (free) ────────────────────────────
+
+registerTool(
+  'get_agent_opportunities',
+  "TensorFeed's daily scan of new repositories across the AI agent ecosystem (Anthropic, OpenAI, Microsoft, ModelContextProtocol, HuggingFace, LangChain, frontier-lab orgs) plus recent MCP, x402, and skill keyword sweeps. Eleven signals total, deduped + composite-scored (signal_weight × log10(stars+1) × recency decay) with per-signal MIN/MAX caps so smaller signals are never starved. Refreshed daily at 13:30 UTC. Useful for surfacing distribution targets, integration ideas, or a daily brief on what's launching across the agent space. Free, no auth.",
+  {
+    signal: z.enum([
+      'anthropic-org', 'openai-org', 'microsoft-org', 'mcp-org', 'huggingface-org',
+      'langchain-org', 'frontier-labs', 'mcp-keyword', 'x402-keyword', 'skill-keyword',
+      'vertical-pattern',
+    ]).optional().describe('Filter to one signal source. Omit to get the cross-signal ranked top-N.'),
+    limit: z.number().min(1).max(25).optional().describe('Max opportunities to render (default 10, max 25)'),
+  },
+  async ({ signal, limit }) => {
+    const data = (await fetchJSON('/agents/opportunities')) as {
+      ok?: boolean;
+      date?: string;
+      capturedAt?: string;
+      total_opportunities?: number;
+      summary?: { by_signal?: Record<string, number>; top_orgs?: { org: string; count: number }[] };
+      opportunities?: { full_name: string; html_url: string; description: string | null; stars: number; updated_at: string; signal: string; composite_score: number }[];
+      error?: string;
+    };
+    if (data.error) {
+      return { content: [{ type: 'text' as const, text: `Agent opportunities unavailable: ${data.error}` }] };
+    }
+    const all = data.opportunities ?? [];
+    const filtered = signal ? all.filter(o => o.signal === signal) : all;
+    const cap = Math.min(limit ?? 10, 25);
+    const top = filtered.slice(0, cap);
+    const lines = top.map((o, i) => {
+      const updated = o.updated_at ? o.updated_at.slice(0, 10) : '';
+      const desc = o.description ? `\n     ${o.description.length > 140 ? o.description.slice(0, 140) + '...' : o.description}` : '';
+      return `${i + 1}. [${o.signal}] ${o.full_name}  ${o.stars.toLocaleString()}★, score ${o.composite_score.toFixed(1)}, updated ${updated}${desc}\n     ${o.html_url}`;
+    }).join('\n\n');
+    const filt = signal ? ` filtered to ${signal}` : '';
+    const header = `Agent ecosystem opportunities for ${data.date ?? 'today'}${filt}. ${top.length} of ${filtered.length} (total snapshot: ${data.total_opportunities ?? all.length}).`;
+    const bySignal = data.summary?.by_signal ? Object.entries(data.summary.by_signal).map(([k, v]) => `${k}=${v}`).join(', ') : '';
+    const sig = bySignal ? `\nBy signal: ${bySignal}` : '';
+    return { content: [{ type: 'text' as const, text: `${header}${sig}\n\n${lines || '  (no opportunities returned)'}\n\nSource: TensorFeed daily GitHub scan via the public Search API.` }] };
+  },
+);
+
 // Single fetch to /api/today which fans out worker-side. The previous
 // implementation made 9 separate fetches per agent invocation; now
 // the worker's edge cache absorbs the load and serves one cached
