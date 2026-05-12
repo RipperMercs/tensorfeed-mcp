@@ -153,6 +153,7 @@ If this server is useful to you, a star helps other agent builders find it. Than
 - AFTA standard: https://tensorfeed.ai/agent-fair-trade
 - Hugging Face dataset: https://huggingface.co/datasets/tensorfeed/ai-ecosystem-daily
 - npm package: https://www.npmjs.com/package/@tensorfeed/mcp-server
+- Companion package, on-chain x402 verifier: https://www.npmjs.com/package/@tensorfeed/x402-base-mcp
 - MCP registry: https://registry.modelcontextprotocol.io/v0/servers/ai.tensorfeed/mcp-server
 - Sister site (real-time data dashboard): https://terminalfeed.io
 - Issues / feature requests: https://github.com/RipperMercs/tensorfeed-mcp/issues
