@@ -100,6 +100,16 @@ const READ_TOOL: ToolAnnotations = {
   idempotentHint: true,
   openWorldHint: true,
 };
+// Paid read tools: same as READ_TOOL but idempotentHint: false because each
+// call burns a credit. Agents that retry on transient failure under
+// READ_TOOL semantics would double-charge users on flaky networks. Applied
+// automatically below when a tool's description includes "Costs N credit".
+const PREMIUM_READ_TOOL: ToolAnnotations = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: false,
+  openWorldHint: true,
+};
 const CREATE_TOOL: ToolAnnotations = {
   readOnlyHint: false,
   destructiveHint: false,
@@ -113,21 +123,79 @@ const DELETE_TOOL: ToolAnnotations = {
   openWorldHint: true,
 };
 
+const PAID_TOOL_RE = /Costs \d+ credit/i;
+
 function registerTool<Args extends ZodRawShape>(
   name: string,
   description: string,
   paramsSchema: Args,
   cb: ToolCallback<Args>,
-  annotations: ToolAnnotations = READ_TOOL,
+  annotations?: ToolAnnotations,
 ) {
+  // When no explicit annotation is passed, infer from the description.
+  // Free reads: READ_TOOL (idempotent). Paid reads (description mentions
+  // "Costs N credit"): PREMIUM_READ_TOOL (NOT idempotent, because each
+  // call burns a credit and naive retry would double-charge). Tools that
+  // mutate (create_*_watch / delete_watch) pass CREATE_TOOL / DELETE_TOOL
+  // explicitly and bypass this inference.
+  const finalAnnotations: ToolAnnotations =
+    annotations ?? (PAID_TOOL_RE.test(description) ? PREMIUM_READ_TOOL : READ_TOOL);
   const wrapped = (async (args: unknown, extra: unknown) => {
     const result = await (cb as (a: unknown, e: unknown) => unknown)(args, extra);
     return sanitizeToolResponse(result as Parameters<typeof sanitizeToolResponse>[0]);
   }) as ToolCallback<Args>;
   // Direct dispatch to the SDK's underlying registration. Do not call
   // registerTool() here or it will recurse forever.
-  return server.tool(name, description, paramsSchema, annotations, wrapped);
+  return server.tool(name, description, paramsSchema, finalAnnotations, wrapped);
 }
+
+// ── Resource: tensorfeed://news (latest 20 AI articles) ─────────────
+// MCP's `resources` primitive is a parallel surface to tools. Hosts can
+// list resources, subscribe to them, and fetch them by URI without going
+// through the tool-call decision loop. We expose the latest news as a
+// resource AS WELL AS the get_ai_news tool, so clients that prefer
+// data-shaped surfaces (Claude Desktop, some agent frameworks) can attach
+// the news feed directly. Same upstream endpoint; different MCP primitive.
+
+server.registerResource(
+  'latest_news',
+  'tensorfeed://news/latest',
+  {
+    description:
+      'Latest 20 AI news articles aggregated by TensorFeed.ai. Refreshed every ~10 minutes from 15+ sources (Anthropic, OpenAI, Google, TechCrunch, The Verge, arXiv, and more). Each row carries title, source, URL, snippet, categories, and publication timestamp. JSON payload. Refresh on `resources/read`; no subscription required.',
+    mimeType: 'application/json',
+  },
+  async (uri) => {
+    const data = (await fetchJSON('/news?limit=20')) as {
+      articles: {
+        title: string;
+        url: string;
+        source: string;
+        snippet: string;
+        categories: string[];
+        publishedAt: string;
+      }[];
+    };
+    return {
+      contents: [
+        {
+          uri: uri.toString(),
+          mimeType: 'application/json',
+          text: JSON.stringify(
+            {
+              source: 'TensorFeed.ai',
+              fetched_at: new Date().toISOString(),
+              count: data.articles.length,
+              articles: data.articles,
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+    };
+  },
+);
 
 // ── Tool: get_ai_news ───────────────────────────────────────────────
 
@@ -478,6 +546,167 @@ registerTool(
     const footer = `\n\nPosture: ${data.posture}`;
 
     return { content: [{ type: 'text' as const, text: `${header}\n\n${body}${footer}` }] };
+  },
+);
+
+// ── Tool: get_honeypot_iocs ─────────────────────────────────────────
+
+registerTool(
+  'get_honeypot_iocs',
+  'Get the TensorFeed honeypot indicators-of-compromise feed. Returns attacker IP addresses, user agents, and target paths observed against TensorFeed.ai trap endpoints over the last 30 days. Pure first-party observation; not a re-export of upstream threat intel. License CC0; downstream defenders may ingest and pre-block at their edge. Each row: ioc value, ioc type (ip / ua / path), first_seen, last_seen, hit_count. Useful as a low-noise honeypot signal layered on top of public IOC feeds.',
+  {
+    type: z
+      .enum(['ip', 'ua', 'path'])
+      .optional()
+      .describe('Filter to one IOC type. Omit to return all types.'),
+    limit: z
+      .number()
+      .min(1)
+      .max(500)
+      .optional()
+      .describe('Maximum number of IOCs to return (default 50, max 500)'),
+  },
+  async ({ type, limit }) => {
+    const data = (await fetchJSON('/security/iocs.json')) as {
+      version: string;
+      generated_at: string;
+      source: string;
+      window_hours: number;
+      total_iocs: number;
+      iocs: {
+        ioc: string;
+        type: string;
+        first_seen: string;
+        last_seen: string;
+        hit_count: number;
+      }[];
+      policy: { description: string; license: string; contact: string };
+    };
+    const typeWanted = type?.toLowerCase();
+    const filtered = data.iocs.filter((e) => !typeWanted || e.type.toLowerCase() === typeWanted);
+    const cap = Math.min(limit ?? 50, 500);
+    const rows = filtered.slice(0, cap);
+
+    if (rows.length === 0) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: `No honeypot IOCs matched (total in feed: ${data.total_iocs}, window ${data.window_hours}h, generated ${data.generated_at}).`,
+          },
+        ],
+      };
+    }
+    const body = rows
+      .map(
+        (e, i) =>
+          `${i + 1}. [${e.type}] ${e.ioc}\n   hits: ${e.hit_count}  first: ${e.first_seen}  last: ${e.last_seen}`,
+      )
+      .join('\n');
+    const header = `TensorFeed honeypot IOCs (${rows.length} of ${filtered.length} matched, ${data.total_iocs} in feed, ${data.window_hours}h window, generated ${data.generated_at}):`;
+    const footer = `\n\nLicense: ${data.policy.license}. ${data.policy.description}`;
+    return { content: [{ type: 'text' as const, text: `${header}\n\n${body}${footer}` }] };
+  },
+);
+
+// ── Tool: check_afta_certification ──────────────────────────────────
+
+registerTool(
+  'check_afta_certification',
+  'Check whether a domain is AFTA-certified (Agent Fair-Trade Agreement). AFTA is an open standard: cryptographically-signed receipts, transparent pricing, no-charge guarantees for failed responses, on-chain settlement, and federated trust between participating sites. The check runs 6 deterministic probes against the target domain (e.g. tensorfeed.ai, terminalfeed.io): well-known endpoint, receipts endpoint, x402 payment manifest, pricing transparency, free trial availability, federation membership. Returns score, verdict, and which checks passed/failed.',
+  {
+    domain: z
+      .string()
+      .describe('Domain to certify (e.g. "tensorfeed.ai", "terminalfeed.io"). Bare host, no protocol.'),
+  },
+  async ({ domain }) => {
+    const data = (await fetchJSON(
+      `/afta-certify/check?domain=${encodeURIComponent(domain)}`,
+    )) as {
+      ok: boolean;
+      domain: string;
+      checked_at: string;
+      checks: { id?: string; name: string; passed: boolean; details?: string }[];
+      score: number;
+      max: number;
+      verdict: string;
+      afta_certified: boolean;
+      next_step?: string;
+      applied_to_directory?: boolean;
+    };
+    const lines = data.checks.map(
+      (c) => `  ${c.passed ? 'PASS' : 'FAIL'}  ${c.name}${c.details ? ` (${c.details})` : ''}`,
+    );
+    const certified = data.afta_certified ? 'AFTA-CERTIFIED' : 'NOT certified';
+    const next = data.next_step ? `\nNext step: ${data.next_step}` : '';
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Domain: ${data.domain}\nScore: ${data.score}/${data.max}\nVerdict: ${data.verdict} (${certified})\nChecked: ${data.checked_at}\n\nChecks:\n${lines.join('\n')}${next}`,
+        },
+      ],
+    };
+  },
+);
+
+// ── Tool: get_agent_reputation_card ─────────────────────────────────
+
+registerTool(
+  'get_agent_reputation_card',
+  'Get a TensorFeed Agent Reputation Bureau card for an EVM wallet address or a tf_live_ token prefix. Cards rebuild daily at 04:50 UTC from on-chain receipts plus TF telemetry. Includes reliability score, paid-call activity, total USDC spent, longest paid streak, composite trust score (0-1), trust grade (S/A/B/C/D), flags (sybil_risk, abuse, paid_free_ratio_low), operator-claim status (wallet -> display name signed by EOA), and per-metric leaderboard ranks. Returns null/404 for unknown agents (TF only builds cards for wallets observed in production). Useful for assessing third-party agent trustworthiness before delegating high-value work.',
+  {
+    wallet: z
+      .string()
+      .optional()
+      .describe('EVM wallet address (0x... 42 chars). Provide either this OR token_prefix.'),
+    token_prefix: z
+      .string()
+      .optional()
+      .describe('First N chars of an agent\'s tf_live_ bearer token. Useful when the agent has not signed an operator-claim yet.'),
+  },
+  async ({ wallet, token_prefix }) => {
+    if (!wallet && !token_prefix) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: 'Provide either `wallet` (0x... EVM address) or `token_prefix` (tf_live_... token prefix). Both are accepted, one is required.',
+          },
+        ],
+      };
+    }
+    const path = wallet
+      ? `/agents/reputation/${encodeURIComponent(wallet)}`
+      : `/agents/reputation/by-token/${encodeURIComponent(token_prefix as string)}`;
+    let data: unknown;
+    try {
+      data = await fetchJSON(path);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.includes('404') || msg.toLowerCase().includes('not_found')) {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `No reputation card for ${wallet ?? token_prefix}. TF only builds cards for wallets observed in production; if this is a real agent that has paid TF before, it should appear in the next daily rebuild (04:50 UTC).`,
+            },
+          ],
+        };
+      }
+      throw e;
+    }
+    // The card schema is rich; render the highlights deterministically and
+    // include the raw JSON so the agent can reason over any field it needs.
+    const card = (data as { card?: Record<string, unknown> }).card ?? (data as Record<string, unknown>);
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Agent reputation card for ${wallet ?? `token_prefix=${token_prefix}`}:\n\n${JSON.stringify(card, null, 2)}`,
+        },
+      ],
+    };
   },
 );
 

@@ -2,6 +2,21 @@
 
 All notable changes to the [TensorFeed.ai MCP server](https://github.com/RipperMercs/tensorfeed-mcp). Free tools work without configuration; premium tools require a bearer token via the `TENSORFEED_TOKEN` env var. Buy credits at [tensorfeed.ai/developers/agent-payments](https://tensorfeed.ai/developers/agent-payments).
 
+## 1.29.0 - 2026-05-13
+
+### Added
+- `get_honeypot_iocs` (free): wraps `/api/security/iocs.json`. First-party honeypot indicators-of-compromise observed against TensorFeed.ai trap endpoints over the last 30 days. Filter by `type` (ip / ua / path), cap with `limit` (default 50, max 500). License CC0; pure first-party observation, not a re-export. Pairs with `get_ai_supply_chain_iocs` (GHSA-derived) for a two-layer defender feed.
+- `check_afta_certification` (free): wraps `/api/afta-certify/check`. Runs 6 deterministic AFTA probes (well-known endpoints, x402 manifest, pricing transparency, free trial, federation membership, signed receipts) against any domain and returns score, verdict, and per-check pass/fail. Useful for federation prospects, agent governance audits, and demand-side trust signals.
+- `get_agent_reputation_card` (free): wraps `/api/agents/reputation/{wallet}` and `/api/agents/reputation/by-token/{prefix}`. Returns the Agent Reputation Bureau card for an EVM wallet or tf_live_ token prefix: reliability, activity, spend, streak, composite trust score, trust grade (S/A/B/C/D), flags, claim status, leaderboard ranks. Cards rebuild daily 04:50 UTC. Returns a helpful 404 hint when no card exists yet.
+
+### Added (MCP primitive)
+- `tensorfeed://news/latest` resource: latest 20 AI news articles as a JSON resource. First TF use of the MCP `resources` primitive, exposed alongside the existing `get_ai_news` tool. Hosts that prefer data-shaped surfaces (Claude Desktop, some agent frameworks) can attach the news feed directly without going through tool-call decision loops.
+
+### Fixed
+- `registerTool` now auto-infers `PREMIUM_READ_TOOL` annotations (`idempotentHint: false`) for any tool whose description includes "Costs N credit". Previously all read tools defaulted to `idempotentHint: true`, which meant agents that retried paid calls on transient failure could double-charge users. Affects every paid read tool (premium_routing, pricing_series, benchmark_series, status_uptime, status_leaderboard, premium_agents_directory, whats_new, compare_models, provider_deepdive, cost_projection, news_search, probe_series_premium). Write tools (create_*_watch / delete_watch) keep their explicit CREATE_TOOL / DELETE_TOOL annotations and bypass the inference.
+
+Tool count: 46 -> 49. First MCP resource live. Annotations now spec-honest about retry semantics.
+
 ## 1.28.0 - 2026-05-13
 
 ### Added
