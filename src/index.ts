@@ -399,6 +399,88 @@ registerTool(
   },
 );
 
+// ── Tool: get_ai_supply_chain_iocs ──────────────────────────────────
+
+registerTool(
+  'get_ai_supply_chain_iocs',
+  'Get the latest AI/ML supply-chain indicators-of-compromise from the TensorFeed defender feed. Daily-refreshed list of GitHub Security Advisory entries filtered by AI/ML/LLM/MCP keyword vocabulary across npm, PyPI, Go, Maven, and other ecosystems. Each entry includes the package name, ecosystem, GHSA advisory ID, severity, summary, vulnerable version range, publication date, and a link to the authoritative GHSA record. Pure data feed: TensorFeed re-publishes already-public advisories, does not detect malware, and does not attribute it. Always treat the linked GHSA record as authoritative. Useful for AI-tool maintainers, MCP-server reviewers, and supply-chain monitors that want a single feed of AI-relevant advisories rather than parsing all of GHSA.',
+  {
+    severity: z
+      .enum(['critical', 'high', 'moderate', 'low'])
+      .optional()
+      .describe('Filter to a single GHSA severity tier'),
+    ecosystem: z
+      .string()
+      .optional()
+      .describe('Filter to a single package ecosystem (e.g. "npm", "pypi", "go", "maven")'),
+    limit: z
+      .number()
+      .min(1)
+      .max(100)
+      .optional()
+      .describe('Maximum number of advisories to return (default 25, max 100)'),
+  },
+  async ({ severity, ecosystem, limit }) => {
+    const data = (await fetchJSON('/security/ai-supply-chain-iocs.json')) as {
+      generated_at: string;
+      total: number;
+      posture: string;
+      sources: { name: string; url: string; license: string }[];
+      entries: {
+        package: { name: string; ecosystem: string };
+        advisory_id: string;
+        severity: string;
+        summary: string;
+        published_at: string;
+        url: string;
+        vulnerable_version_range: string;
+        ai_relevance?: { matched_keywords?: string[] };
+        primary_source: string;
+      }[];
+    };
+
+    const sevWanted = severity?.toLowerCase();
+    const ecoWanted = ecosystem?.toLowerCase();
+    const filtered = data.entries.filter((e) => {
+      if (sevWanted && e.severity.toLowerCase() !== sevWanted) return false;
+      if (ecoWanted && e.package.ecosystem.toLowerCase() !== ecoWanted) return false;
+      return true;
+    });
+    const cap = Math.min(limit ?? 25, 100);
+    const rows = filtered.slice(0, cap);
+
+    if (rows.length === 0) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: `No AI supply-chain IOCs matched (total in feed: ${data.total}, generated ${data.generated_at}).`,
+          },
+        ],
+      };
+    }
+
+    const body = rows
+      .map((e, i) => {
+        const kw = e.ai_relevance?.matched_keywords?.length
+          ? ` [matched: ${e.ai_relevance.matched_keywords.join(', ')}]`
+          : '';
+        return [
+          `${i + 1}. ${e.package.ecosystem}: ${e.package.name} (${e.severity.toUpperCase()})`,
+          `   ${e.summary}`,
+          `   GHSA: ${e.advisory_id}  ${e.url}`,
+          `   Affected: ${e.vulnerable_version_range}  Published: ${e.published_at}${kw}`,
+        ].join('\n');
+      })
+      .join('\n\n');
+
+    const header = `AI supply-chain IOCs (${rows.length} of ${filtered.length} matched, ${data.total} in feed, generated ${data.generated_at}):`;
+    const footer = `\n\nPosture: ${data.posture}`;
+
+    return { content: [{ type: 'text' as const, text: `${header}\n\n${body}${footer}` }] };
+  },
+);
+
 // ════════════════════════════════════════════════════════════════════
 // PREMIUM TOOLS (require TENSORFEED_TOKEN env var, paid in USDC on Base)
 // ════════════════════════════════════════════════════════════════════

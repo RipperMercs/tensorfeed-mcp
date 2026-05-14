@@ -2,6 +2,13 @@
 
 All notable changes to the [TensorFeed.ai MCP server](https://github.com/RipperMercs/tensorfeed-mcp). Free tools work without configuration; premium tools require a bearer token via the `TENSORFEED_TOKEN` env var. Buy credits at [tensorfeed.ai/developers/agent-payments](https://tensorfeed.ai/developers/agent-payments).
 
+## 1.28.0 - 2026-05-13
+
+### Added
+- `get_ai_supply_chain_iocs` (free): wraps `/api/security/ai-supply-chain-iocs.json`. Daily-refreshed list of GitHub Security Advisory entries filtered by AI/ML/LLM/MCP keyword vocabulary across npm, PyPI, Go, Maven, and other package ecosystems. Each row carries the package name, ecosystem, GHSA advisory ID, severity, summary, vulnerable version range, publication date, and the canonical GHSA URL. Optional `severity` and `ecosystem` filters; `limit` caps result count (default 25, max 100). Republish posture: TensorFeed re-publishes already-public advisories; the linked GHSA record is authoritative. Useful for MCP-server reviewers, AI-tool maintainers, and supply-chain monitors that want a single AI-relevant feed rather than parsing all of GHSA.
+
+Tool count: 45 -> 46. Lands the same security feed that caught the @mistralai npm worm on day 1, now reachable as an MCP tool for defenders running agentic supply-chain audits.
+
 ## 1.27.0 - 2026-05-09
 
 ### Added
