@@ -2,6 +2,26 @@
 
 All notable changes to the [TensorFeed.ai MCP server](https://github.com/RipperMercs/tensorfeed-mcp). Free tools work without configuration; premium tools require a bearer token via the `TENSORFEED_TOKEN` env var. Buy credits at [tensorfeed.ai/developers/agent-payments](https://tensorfeed.ai/developers/agent-payments).
 
+## 1.31.0 - 2026-05-14 (Commit B repricing)
+
+### Changed (pricing)
+Six tools mapping to strict-premium TF Worker endpoints are repriced from Tier 1 ($0.02) into higher tiers reflecting the curated-derived-metrics value they provide. Tool descriptions updated to advertise the new prices:
+
+- `pricing_series`: 1 credit ($0.02) -> 2 credits ($0.04)
+- `benchmark_series`: 1 credit ($0.02) -> 2 credits ($0.04)
+- `status_uptime`: 1 credit ($0.02) -> 2 credits ($0.04)
+- `status_leaderboard`: 1 credit ($0.02) -> 3 credits ($0.06)
+- `provider_deepdive`: 1 credit ($0.02) -> 3 credits ($0.06)
+- `probe_series_premium`: 1 credit ($0.02) -> 3 credits ($0.06)
+
+Tier 2 ($0.04) tools are single-entity full-window historical lookups. Tier 3 ($0.06) tools are heavy multi-source aggregations and TF-unique measurements.
+
+Rationale: per the 70/30 premium-lock framework, strict-premium endpoints carry TF's actual moat. The Tier 1 ($0.02) baseline price made sense during the demand-discovery temp-unlock; now that these endpoints are gated as strict-premium (v1.30.0) and the gate is observable, repricing into Tier 2/3 sets prices closer to the curated-derived-metrics market (Glassnode / Kaito comparables). Per-call USD cost is now legible alongside credit count in every affected tool description.
+
+Worker changes accompanying this release: `worker/src/index.ts` updates the `requirePayment(..., tier)` and `logPremiumUsage(..., credits)` calls on the 8 strict-premium routes. Two of those routes are not exposed as MCP tools (premium_funding_exposure, premium_packages_momentum) but receive the same tier bump server-side.
+
+No behavior change to free-trial-eligible tools (premium_routing stays at Tier 2 as before, all single-query lookups stay where they were). No change to the strict-premium gate itself (v1.30.0). No change to the on-chain x402 facilitator or credit-purchase minimums.
+
 ## 1.30.0 - 2026-05-14
 
 ### Changed

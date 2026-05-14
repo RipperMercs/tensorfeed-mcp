@@ -964,7 +964,7 @@ registerTool(
 
 registerTool(
   'pricing_series',
-  'Daily price points for one AI model with min/max/delta summary. Default range = last 30 days, max 90 days. Costs 1 credit ($0.02). Strict premium, no free trial; the 7-day-capped sibling pricing_series_free is the discovery option.',
+  'Daily price points for one AI model with min/max/delta summary. Default range = last 30 days, max 90 days. Costs 2 credits ($0.04). Strict premium, no free trial; the 7-day-capped sibling pricing_series_free is the discovery option.',
   {
     model: z.string().describe('Model id or display name (e.g. "Claude Opus 4.7" or "claude-opus-4-7")'),
     from: z.string().optional().describe('Start date YYYY-MM-DD UTC (default: 30 days ago)'),
@@ -1008,7 +1008,7 @@ registerTool(
 
 registerTool(
   'benchmark_series',
-  'Score evolution for a single benchmark on one AI model. Costs 1 credit ($0.02). Strict premium, no free trial; the 7-day-capped sibling benchmark_series_free is the discovery option. Benchmark keys: swe_bench, mmlu_pro, gpqa_diamond, math, human_eval.',
+  'Score evolution for a single benchmark on one AI model. Costs 2 credits ($0.04). Strict premium, no free trial; the 7-day-capped sibling benchmark_series_free is the discovery option. Benchmark keys: swe_bench, mmlu_pro, gpqa_diamond, math, human_eval.',
   {
     model: z.string().describe('Model id or display name'),
     benchmark: z.string().describe('Benchmark key (e.g. swe_bench, mmlu_pro, gpqa_diamond, math, human_eval)'),
@@ -1045,7 +1045,7 @@ registerTool(
 
 registerTool(
   'status_uptime',
-  'Daily uptime rollup for one provider with operational/degraded/down day counts and uptime % (degraded counts as half-credit). Costs 1 credit ($0.02). Strict premium, no free trial; the 7-day-capped sibling status_uptime_free is the discovery option.',
+  'Daily uptime rollup for one provider with operational/degraded/down day counts and uptime % (degraded counts as half-credit). Costs 2 credits ($0.04). Strict premium, no free trial; the 7-day-capped sibling status_uptime_free is the discovery option.',
   {
     provider: z.string().describe('Provider name (e.g. anthropic, openai, google)'),
     from: z.string().optional().describe('Start date YYYY-MM-DD UTC (default: 30 days ago)'),
@@ -1088,7 +1088,7 @@ registerTool(
 
 registerTool(
   'status_leaderboard',
-  'Cross-provider uptime leaderboard for a custom date range up to 90 days. Same minute-resolution counter source as status_leaderboard_free, but adds incident_count and mttr_minutes (mean time to recover) per provider. Sorted by uptime % DESC. Costs 1 credit ($0.02). Strict premium, no free trial; the 7-day-capped sibling status_leaderboard_free is the discovery option.',
+  'Cross-provider uptime leaderboard for a custom date range up to 90 days. Same minute-resolution counter source as status_leaderboard_free, but adds incident_count and mttr_minutes (mean time to recover) per provider. Sorted by uptime % DESC. Costs 3 credits ($0.06). Strict premium, no free trial; the 7-day-capped sibling status_leaderboard_free is the discovery option.',
   {
     from: z.string().optional().describe('Start date YYYY-MM-DD UTC (default: 30 days ago)'),
     to: z.string().optional().describe('End date YYYY-MM-DD UTC (default: today)'),
@@ -1293,7 +1293,7 @@ registerTool(
 
 registerTool(
   'provider_deepdive',
-  'Everything about an AI provider in one call: live status, all models with pricing + tier + benchmark scores joined in, recent news mentions, and agent traffic. Costs 1 credit ($0.02). Strict premium, no free trial. Aggregation IS the value; doing this from free endpoints would take 4 round-trips.',
+  'Everything about an AI provider in one call: live status, all models with pricing + tier + benchmark scores joined in, recent news mentions, and agent traffic. Costs 3 credits ($0.06). Strict premium, no free trial. Aggregation IS the value; doing this from free endpoints would take 4 round-trips.',
   {
     provider: z.string().describe('Provider id or display name (case-insensitive). Examples: anthropic, openai, google, mistral, cohere'),
   },
@@ -1671,7 +1671,7 @@ registerTool(
 
 registerTool(
   'probe_series',
-  'Daily SLA series for one LLM provider, measured by TensorFeed. Returns per-day count, success rate, ttfb p50/p95/p99, total p50/p95/p99, and incident-hour count across the requested window. Provider status pages are politically managed; this is the measured truth. Pairs naturally with premium_routing for picking a model whose SLA you can verify. Costs 1 credit ($0.02). Strict premium, no free trial.',
+  'Daily SLA series for one LLM provider, measured by TensorFeed. Returns per-day count, success rate, ttfb p50/p95/p99, total p50/p95/p99, and incident-hour count across the requested window. Provider status pages are politically managed; this is the measured truth. Pairs naturally with premium_routing for picking a model whose SLA you can verify. Costs 3 credits ($0.06). Strict premium, no free trial.',
   {
     provider: z.enum(['anthropic', 'openai', 'google', 'mistral', 'cohere']).describe('LLM provider key'),
     from: z.string().optional().describe('Inclusive start YYYY-MM-DD (default: 30 days before to)'),
