@@ -1774,50 +1774,6 @@ registerTool(
   },
 );
 
-// ── Tool: mcp_registry_series (1 credit) ────────────────────────────
-
-registerTool(
-  'mcp_registry_series',
-  'Multi-day series of MCP server registry growth and churn. Returns per-day total servers, active count, and daily added/removed counts across the requested window. The registry itself is open data, but a 30/90-day trend requires daily capture started weeks ago, which TensorFeed has been running. Costs 1 credit ($0.02).',
-  {
-    from: z.string().optional().describe('Inclusive start date YYYY-MM-DD (default: 30 days before to)'),
-    to: z.string().optional().describe('Inclusive end date YYYY-MM-DD (default: today UTC)'),
-  },
-  async ({ from, to }) => {
-    const params = new URLSearchParams();
-    if (from) params.set('from', from);
-    if (to) params.set('to', to);
-    const data = (await fetchJSON(`/premium/mcp/registry/series?${params}`, { auth: true })) as {
-      from: string;
-      to: string;
-      days: number;
-      points: { date: string; total_servers: number | null; added: number | null; removed: number | null; has_data: boolean }[];
-      delta_in_window: { start_total: number | null; end_total: number | null; net: number | null };
-      notes: string[];
-      billing?: { credits_remaining?: number };
-    };
-    const lines = data.points
-      .map(p => p.has_data
-        ? `  ${p.date}  total=${p.total_servers}  +${p.added ?? 0}/-${p.removed ?? 0}`
-        : `  ${p.date}  (no snapshot captured)`,
-      )
-      .join('\n');
-    const w = data.delta_in_window;
-    const summary = w.start_total !== null && w.end_total !== null
-      ? `Window ${data.from} -> ${data.to}: ${w.start_total} -> ${w.end_total} (net ${w.net! >= 0 ? '+' : ''}${w.net})`
-      : `Window ${data.from} -> ${data.to}: insufficient data`;
-    const notes = data.notes.length ? '\nNotes: ' + data.notes.join('; ') : '';
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: `${summary}\n\n${lines}${notes}\n\nCredits remaining: ${data.billing?.credits_remaining ?? '?'}`,
-        },
-      ],
-    };
-  },
-);
-
 // ── Tool: get_ai_papers_trending (free) ─────────────────────────────
 
 registerTool(

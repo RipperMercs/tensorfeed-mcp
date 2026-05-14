@@ -2,6 +2,14 @@
 
 All notable changes to the [TensorFeed.ai MCP server](https://github.com/RipperMercs/tensorfeed-mcp). Free tools work without configuration; premium tools require a bearer token via the `TENSORFEED_TOKEN` env var. Buy credits at [tensorfeed.ai/developers/agent-payments](https://tensorfeed.ai/developers/agent-payments).
 
+## 1.32.0 - 2026-05-14 (Off-thesis tool cull)
+
+### Removed
+- `mcp_registry_series` tool: dropped. MCP registry is open data; a 30/90-day TF capture didn't clear the "saves >$0.02 per call" bar that Gemini 3's external analysis articulated and that TF has been operating under for premium endpoints. Agents that need the time-series can scrape the registry's open API directly.
+
+### Background
+Premium endpoint audit (2026-05-14) through the lens "does this clearly save the agent more than 2¢ in tokens/latency/decision-time?" identified six TF Worker endpoints off-thesis: macro digest, FDA aggregate, EIA series, NASA POWER daily/hourly, and MCP registry series. All six pulled from the public manifest, OpenAPI, llms.txt, /developers, and /api/meta in the same commit. Only the MCP registry series has an MCP-server tool wrapper, so it's the only tool-side change in this release.
+
 ## 1.31.0 - 2026-05-14 (Commit B repricing)
 
 ### Changed (pricing)
