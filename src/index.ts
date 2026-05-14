@@ -772,7 +772,7 @@ registerTool(
 
 registerTool(
   'premium_routing',
-  'Get a ranked list of recommended AI models for a task with full score breakdown (quality, availability, cost, latency). Costs 1 credit.',
+  'Get a ranked list of recommended AI models for a task with full score breakdown (quality, availability, cost, latency). Costs 1 credit ($0.02).',
   {
     task: z.enum(['code', 'reasoning', 'creative', 'general']).optional().describe('Task type the model needs to be good at (default: general)'),
     budget: z.number().optional().describe('Max blended USD per 1M tokens'),
@@ -964,7 +964,7 @@ registerTool(
 
 registerTool(
   'pricing_series',
-  'Daily price points for one AI model with min/max/delta summary. Default range = last 30 days, max 90 days. Costs 1 credit.',
+  'Daily price points for one AI model with min/max/delta summary. Default range = last 30 days, max 90 days. Costs 1 credit ($0.02). Strict premium, no free trial; the 7-day-capped sibling pricing_series_free is the discovery option.',
   {
     model: z.string().describe('Model id or display name (e.g. "Claude Opus 4.7" or "claude-opus-4-7")'),
     from: z.string().optional().describe('Start date YYYY-MM-DD UTC (default: 30 days ago)'),
@@ -1008,7 +1008,7 @@ registerTool(
 
 registerTool(
   'benchmark_series',
-  'Score evolution for a single benchmark on one AI model. Costs 1 credit. Benchmark keys: swe_bench, mmlu_pro, gpqa_diamond, math, human_eval.',
+  'Score evolution for a single benchmark on one AI model. Costs 1 credit ($0.02). Strict premium, no free trial; the 7-day-capped sibling benchmark_series_free is the discovery option. Benchmark keys: swe_bench, mmlu_pro, gpqa_diamond, math, human_eval.',
   {
     model: z.string().describe('Model id or display name'),
     benchmark: z.string().describe('Benchmark key (e.g. swe_bench, mmlu_pro, gpqa_diamond, math, human_eval)'),
@@ -1045,7 +1045,7 @@ registerTool(
 
 registerTool(
   'status_uptime',
-  'Daily uptime rollup for one provider with operational/degraded/down day counts and uptime % (degraded counts as half-credit). Costs 1 credit.',
+  'Daily uptime rollup for one provider with operational/degraded/down day counts and uptime % (degraded counts as half-credit). Costs 1 credit ($0.02). Strict premium, no free trial; the 7-day-capped sibling status_uptime_free is the discovery option.',
   {
     provider: z.string().describe('Provider name (e.g. anthropic, openai, google)'),
     from: z.string().optional().describe('Start date YYYY-MM-DD UTC (default: 30 days ago)'),
@@ -1088,7 +1088,7 @@ registerTool(
 
 registerTool(
   'status_leaderboard',
-  'Cross-provider uptime leaderboard for a custom date range up to 90 days. Same minute-resolution counter source as status_leaderboard_free, but adds incident_count and mttr_minutes (mean time to recover) per provider. Sorted by uptime % DESC. Costs 1 credit.',
+  'Cross-provider uptime leaderboard for a custom date range up to 90 days. Same minute-resolution counter source as status_leaderboard_free, but adds incident_count and mttr_minutes (mean time to recover) per provider. Sorted by uptime % DESC. Costs 1 credit ($0.02). Strict premium, no free trial; the 7-day-capped sibling status_leaderboard_free is the discovery option.',
   {
     from: z.string().optional().describe('Start date YYYY-MM-DD UTC (default: 30 days ago)'),
     to: z.string().optional().describe('End date YYYY-MM-DD UTC (default: today)'),
@@ -1139,7 +1139,7 @@ registerTool(
 
 registerTool(
   'premium_agents_directory',
-  'Enriched AI agents catalog joined with live status, recent news, agent traffic, flagship pricing, and a 0-100 trending_score. Costs 1 credit.',
+  'Enriched AI agents catalog joined with live status, recent news, agent traffic, flagship pricing, and a 0-100 trending_score. Costs 1 credit ($0.02).',
   {
     category: z.string().optional().describe('coding, research, general, creative, frameworks'),
     status: z.enum(['operational', 'degraded', 'down', 'unknown']).optional(),
@@ -1192,7 +1192,7 @@ registerTool(
 
 registerTool(
   'whats_new',
-  'Agent morning brief: pricing changes, new/removed models, status incidents, and top news from the last 1-7 days. The tool to call when your agent boots up. Costs 1 credit.',
+  'Agent morning brief: pricing changes, new/removed models, status incidents, and top news from the last 1-7 days. The tool to call when your agent boots up. Costs 1 credit ($0.02).',
   {
     days: z.number().min(1).max(7).optional().describe('Window length in days (default 1)'),
     news_limit: z.number().min(1).max(25).optional().describe('Max news headlines (default 10)'),
@@ -1245,7 +1245,7 @@ registerTool(
 
 registerTool(
   'compare_models',
-  'Side-by-side comparison of 2-5 AI models. Returns pricing, benchmarks (normalized to a union of keys with null for missing scores), provider status, and recent news per model, plus rankings (cheapest blended, most context, per-benchmark leaderboard). Costs 1 credit.',
+  'Side-by-side comparison of 2-5 AI models. Returns pricing, benchmarks (normalized to a union of keys with null for missing scores), provider status, and recent news per model, plus rankings (cheapest blended, most context, per-benchmark leaderboard). Costs 1 credit ($0.02).',
   {
     ids: z.string().describe('Comma-separated list of 2-5 model ids or display names. Examples: "Claude Opus 4.7,GPT-5.5,Gemini 3" or "opus-4-7,gpt-5-5"'),
   },
@@ -1293,7 +1293,7 @@ registerTool(
 
 registerTool(
   'provider_deepdive',
-  'Everything about an AI provider in one call: live status, all models with pricing + tier + benchmark scores joined in, recent news mentions, and agent traffic. Costs 1 credit. Aggregation IS the value; doing this from free endpoints would take 4 round-trips.',
+  'Everything about an AI provider in one call: live status, all models with pricing + tier + benchmark scores joined in, recent news mentions, and agent traffic. Costs 1 credit ($0.02). Strict premium, no free trial. Aggregation IS the value; doing this from free endpoints would take 4 round-trips.',
   {
     provider: z.string().describe('Provider id or display name (case-insensitive). Examples: anthropic, openai, google, mistral, cohere'),
   },
@@ -1339,7 +1339,7 @@ registerTool(
 
 registerTool(
   'cost_projection',
-  'Project the cost of a token-usage workload across 1-10 AI models. Returns daily/weekly/monthly/yearly totals per model and a ranking by cheapest monthly. Costs 1 credit.',
+  'Project the cost of a token-usage workload across 1-10 AI models. Returns daily/weekly/monthly/yearly totals per model and a ranking by cheapest monthly. Costs 1 credit ($0.02).',
   {
     models: z.string().describe('One model or comma-separated list of up to 10 (e.g. "Claude Opus 4.7,GPT-5.5,Gemini 3"). Names or ids both work.'),
     input_tokens_per_day: z.number().min(0).describe('Expected daily input token volume'),
@@ -1388,7 +1388,7 @@ registerTool(
 
 registerTool(
   'news_search',
-  'Full-text search over the TensorFeed news article corpus with optional date range, provider, and category filters. Relevance scoring with recency boost. Costs 1 credit.',
+  'Full-text search over the TensorFeed news article corpus with optional date range, provider, and category filters. Relevance scoring with recency boost. Costs 1 credit ($0.02).',
   {
     q: z.string().optional().describe('Free-text query, e.g. "claude opus pricing". Omit to browse latest filtered articles.'),
     from: z.string().optional().describe('Start date YYYY-MM-DD UTC (inclusive)'),
@@ -1471,7 +1471,7 @@ registerTool(
 
 registerTool(
   'create_price_watch',
-  'Register a webhook watch on a model price change. Costs 1 credit. Watch lives 90 days. Each fire is an HMAC-signed POST to callback_url.',
+  'Register a webhook watch on a model price change. Costs 1 credit ($0.02). Watch lives 90 days. Each fire is an HMAC-signed POST to callback_url.',
   {
     model: z.string().describe('Model name (e.g. "Claude Opus 4.7")'),
     field: z.enum(['inputPrice', 'outputPrice', 'blended']).describe('Which price field to watch'),
@@ -1506,7 +1506,7 @@ registerTool(
 
 registerTool(
   'create_status_watch',
-  'Register a webhook watch on a service status transition (e.g. anthropic becomes down). Costs 1 credit. Watch lives 90 days.',
+  'Register a webhook watch on a service status transition (e.g. anthropic becomes down). Costs 1 credit ($0.02). Watch lives 90 days.',
   {
     provider: z.string().describe('Provider name (e.g. anthropic, openai)'),
     op: z.enum(['becomes', 'changes']).describe('becomes = transitions to a specific value; changes = any transition'),
@@ -1540,7 +1540,7 @@ registerTool(
 
 registerTool(
   'create_digest_watch',
-  'Register a scheduled digest webhook that fires daily or weekly with a curated summary of pricing changes (regardless of whether anything dramatic happened). Costs 1 credit. Watch lives 90 days. Set-and-forget for agents that want a periodic snapshot without subscribing to realtime transitions.',
+  'Register a scheduled digest webhook that fires daily or weekly with a curated summary of pricing changes (regardless of whether anything dramatic happened). Costs 1 credit ($0.02). Watch lives 90 days. Set-and-forget for agents that want a periodic snapshot without subscribing to realtime transitions.',
   {
     cadence: z.enum(['daily', 'weekly']).describe('How often the digest fires'),
     callback_url: z.string().describe('HTTPS URL to POST to when the digest fires'),
@@ -1572,7 +1572,7 @@ registerTool(
 
 registerTool(
   'create_leaderboard_rank_watch',
-  'Register a webhook that fires when a provider crosses a rank threshold on the cross-provider 7-day uptime leaderboard. Rank 1 = best (highest uptime). drops_below: was rank<=N, now rank>N (got worse). rises_above: was rank>=N, now rank<N (got better). changes: any rank movement. Costs 1 credit at registration. Watch lives 90 days.',
+  'Register a webhook that fires when a provider crosses a rank threshold on the cross-provider 7-day uptime leaderboard. Rank 1 = best (highest uptime). drops_below: was rank<=N, now rank>N (got worse). rises_above: was rank>=N, now rank<N (got better). changes: any rank movement. Costs 1 credit ($0.02) at registration. Watch lives 90 days.',
   {
     provider: z.string().describe('Provider name or slug (case-insensitive). e.g. claude, openai, gemini, bedrock, azure'),
     op: z.enum(['drops_below', 'rises_above', 'changes']).describe('Trigger condition'),
@@ -1671,7 +1671,7 @@ registerTool(
 
 registerTool(
   'probe_series',
-  'Daily SLA series for one LLM provider, measured by TensorFeed. Returns per-day count, success rate, ttfb p50/p95/p99, total p50/p95/p99, and incident-hour count across the requested window. Provider status pages are politically managed; this is the measured truth. Pairs naturally with premium_routing for picking a model whose SLA you can verify. Costs 1 credit.',
+  'Daily SLA series for one LLM provider, measured by TensorFeed. Returns per-day count, success rate, ttfb p50/p95/p99, total p50/p95/p99, and incident-hour count across the requested window. Provider status pages are politically managed; this is the measured truth. Pairs naturally with premium_routing for picking a model whose SLA you can verify. Costs 1 credit ($0.02). Strict premium, no free trial.',
   {
     provider: z.enum(['anthropic', 'openai', 'google', 'mistral', 'cohere']).describe('LLM provider key'),
     from: z.string().optional().describe('Inclusive start YYYY-MM-DD (default: 30 days before to)'),
@@ -1778,7 +1778,7 @@ registerTool(
 
 registerTool(
   'mcp_registry_series',
-  'Multi-day series of MCP server registry growth and churn. Returns per-day total servers, active count, and daily added/removed counts across the requested window. The registry itself is open data, but a 30/90-day trend requires daily capture started weeks ago, which TensorFeed has been running. Costs 1 credit.',
+  'Multi-day series of MCP server registry growth and churn. Returns per-day total servers, active count, and daily added/removed counts across the requested window. The registry itself is open data, but a 30/90-day trend requires daily capture started weeks ago, which TensorFeed has been running. Costs 1 credit ($0.02).',
   {
     from: z.string().optional().describe('Inclusive start date YYYY-MM-DD (default: 30 days before to)'),
     to: z.string().optional().describe('Inclusive end date YYYY-MM-DD (default: today UTC)'),

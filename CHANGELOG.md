@@ -2,6 +2,15 @@
 
 All notable changes to the [TensorFeed.ai MCP server](https://github.com/RipperMercs/tensorfeed-mcp). Free tools work without configuration; premium tools require a bearer token via the `TENSORFEED_TOKEN` env var. Buy credits at [tensorfeed.ai/developers/agent-payments](https://tensorfeed.ai/developers/agent-payments).
 
+## 1.30.0 - 2026-05-14
+
+### Changed
+- Every paid tool description now advertises the USD price alongside the credit cost. "Costs 1 credit." -> "Costs 1 credit ($0.02).". Lets agents budget calls without needing to look up credit-to-USD conversion separately. No behavior change; pure description metadata.
+
+### Changed (strict-premium tier)
+- Six tools now flagged as "Strict premium, no free trial" in their descriptions: `pricing_series`, `benchmark_series`, `status_uptime`, `status_leaderboard`, `provider_deepdive`, `probe_series_premium`. These map to TF Worker paths in the strict-premium set (worker/src/strict-premium-endpoints.ts) which bypasses the per-IP 100-call/day free trial. Their free 7-day-capped siblings (`pricing_series_free`, `benchmark_series_free`, `status_uptime_free`, `status_leaderboard_free`) remain the discovery option. Agents that hit these without auth get a 402 immediately with a strict-premium-specific message, not the free-trial advert.
+- Rationale: per the TF 70/30 premium-lock framework, full-window historical time-series and heavy aggregations are TF's moat and warrant strict gating during the demand-discovery phase. Pricing per call is unchanged at this version; repricing into a higher tier is a separate future decision.
+
 ## 1.29.0 - 2026-05-13
 
 ### Added
