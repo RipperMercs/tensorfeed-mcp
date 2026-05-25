@@ -2,7 +2,12 @@
 
 All notable changes to the [TensorFeed.ai MCP server](https://github.com/RipperMercs/tensorfeed-mcp). Free tools work without configuration; premium tools require a bearer token via the `TENSORFEED_TOKEN` env var. Buy credits at [tensorfeed.ai/developers/agent-payments](https://tensorfeed.ai/developers/agent-payments).
 
-## 1.33.0 - 2026-05-25 (AI-CVE intelligence tools)
+## 1.33.0 - 2026-05-25 (AI-CVE intelligence tools, unified versioning)
+
+Versions across npm + MCP Registry + MCPB manifest are now all 1.33.0
+(prior drift between npm @ 1.32 and registry/manifest @ 1.27 was
+collapsed in this release so server.json.packages[0].version matches
+what npm actually serves).
 
 ### Added (free tier)
 Three new free tools wrapping the AI-CVE endpoints that went live on the TF Worker:
