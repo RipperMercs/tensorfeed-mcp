@@ -2420,6 +2420,115 @@ registerTool(
   },
 );
 
+// ── Tool: get_ai_cves_latest ────────────────────────────────────────
+
+registerTool(
+  'get_ai_cves_latest',
+  'Get metadata for the most-recent AI-stack CVE batch plus the first 25 papers. Source: TensorFeed AI-CVE intelligence feed, derived from GitHub Security Advisories (CC BY 4.0). Each paper carries cve_ids, affected_products, affected_version_ranges, fixed_versions, exploited_in_wild, severity_label, and source_url. For the full set use get_ai_cves_feed with offset; for AI-stack-filtered + categorized + sorted papers use the paid /api/premium/ai-cves/* endpoints. Free, no auth.',
+  {},
+  async () => {
+    const data = (await fetchJSON('/ai-cves/latest')) as {
+      batch_id: string | null;
+      extracted_at: string | null;
+      total_papers: number;
+      ai_flagged_count: number;
+      papers: { cve_ids: string[]; affected_products: string[]; severity_label: string; exploited_in_wild: string; source_url: string }[];
+      source_license: string;
+      source_attribution: string;
+    };
+    if (!data.batch_id) {
+      return { content: [{ type: 'text' as const, text: 'No AI-CVE batch ingested yet. Check back once TensorFeed CC has POSTed the next clean batch from the extraction pipeline.' }] };
+    }
+    const head = `AI-CVE batch ${data.batch_id} extracted ${data.extracted_at}. Total ${data.total_papers} papers, ${data.ai_flagged_count} AI-flagged. License ${data.source_license} (${data.source_attribution}).`;
+    const lines = data.papers
+      .map((p, i) => {
+        const cves = p.cve_ids.length > 0 ? p.cve_ids.join(', ') : '(no CVE)';
+        const products = p.affected_products.slice(0, 3).join(', ');
+        return `${i + 1}. ${cves} | ${products} | sev=${p.severity_label} | exploited=${p.exploited_in_wild}\n   ${p.source_url}`;
+      })
+      .join('\n');
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `${head}\n\nFirst 25 papers:\n${lines}\n\nFor AI-stack-filtered + categorized + sorted papers: /api/premium/ai-cves/ai-stack-cves (1 credit, x402-paid). For only papers actively exploited in the wild: /api/premium/ai-cves/exploited-in-wild (1 credit). For single-CVE lookup: /api/premium/ai-cves/cve?id=CVE-YYYY-NNNNN (1 credit).`,
+        },
+      ],
+    };
+  },
+);
+
+// ── Tool: get_ai_cves_feed ──────────────────────────────────────────
+
+registerTool(
+  'get_ai_cves_feed',
+  'Get a paginated slice of the most-recent AI-stack CVE batch. limit is capped at 50 (the premium tier handles bulk). Source: TensorFeed AI-CVE feed, derived from GitHub Security Advisories (CC BY 4.0). Free, no auth.',
+  {
+    limit: z.number().min(1).max(50).optional().describe('Number of papers to return (default 25, max 50).'),
+    offset: z.number().min(0).optional().describe('Pagination offset (default 0).'),
+  },
+  async ({ limit, offset }) => {
+    const params = new URLSearchParams();
+    if (typeof limit === 'number') params.set('limit', String(limit));
+    if (typeof offset === 'number') params.set('offset', String(offset));
+    const path = `/ai-cves/feed${params.toString() ? `?${params.toString()}` : ''}`;
+    const data = (await fetchJSON(path)) as {
+      batch_id: string | null;
+      total: number;
+      limit: number;
+      offset: number;
+      papers: { cve_ids: string[]; affected_products: string[]; severity_label: string; exploited_in_wild: string; source_url: string }[];
+    };
+    if (!data.batch_id) {
+      return { content: [{ type: 'text' as const, text: 'No AI-CVE batch ingested yet.' }] };
+    }
+    const head = `AI-CVE feed batch ${data.batch_id}: showing offset ${data.offset} to ${data.offset + data.papers.length} of ${data.total} total.`;
+    const lines = data.papers
+      .map((p, i) => {
+        const cves = p.cve_ids.length > 0 ? p.cve_ids.join(', ') : '(no CVE)';
+        const products = p.affected_products.slice(0, 3).join(', ');
+        return `${i + 1}. ${cves} | ${products} | sev=${p.severity_label} | exploited=${p.exploited_in_wild}\n   ${p.source_url}`;
+      })
+      .join('\n');
+    return { content: [{ type: 'text' as const, text: `${head}\n\n${lines}` }] };
+  },
+);
+
+// ── Tool: get_ai_cves_stats ─────────────────────────────────────────
+
+registerTool(
+  'get_ai_cves_stats',
+  'Get aggregate counts across the most-recent AI-stack CVE batch: distribution by severity (critical/high/medium/low/unstated), distribution by exploitation status (stated_yes/stated_no/unstated), and top 10 vendors by frequency. Source: TensorFeed AI-CVE feed (GitHub Security Advisories, CC BY 4.0). Free, no auth.',
+  {},
+  async () => {
+    const data = (await fetchJSON('/ai-cves/stats')) as {
+      batch_id: string | null;
+      total_papers: number;
+      by_severity: Record<string, number>;
+      by_exploitation: Record<string, number>;
+      top_vendors: { vendor: string; count: number }[];
+    };
+    if (!data.batch_id) {
+      return { content: [{ type: 'text' as const, text: 'No AI-CVE batch ingested yet.' }] };
+    }
+    const sev = Object.entries(data.by_severity)
+      .map(([k, v]) => `  ${k}: ${v}`)
+      .join('\n');
+    const exp = Object.entries(data.by_exploitation)
+      .map(([k, v]) => `  ${k}: ${v}`)
+      .join('\n');
+    const vendors = data.top_vendors.map((v, i) => `  ${i + 1}. ${v.vendor}: ${v.count}`).join('\n');
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `AI-CVE batch ${data.batch_id}: ${data.total_papers} total papers.\n\nBy severity:\n${sev}\n\nBy exploited-in-wild:\n${exp}\n\nTop vendors:\n${vendors}`,
+        },
+      ],
+    };
+  },
+);
+
 // ── Start ───────────────────────────────────────────────────────────
 
 async function main() {

@@ -2,6 +2,20 @@
 
 All notable changes to the [TensorFeed.ai MCP server](https://github.com/RipperMercs/tensorfeed-mcp). Free tools work without configuration; premium tools require a bearer token via the `TENSORFEED_TOKEN` env var. Buy credits at [tensorfeed.ai/developers/agent-payments](https://tensorfeed.ai/developers/agent-payments).
 
+## 1.33.0 - 2026-05-25 (AI-CVE intelligence tools)
+
+### Added (free tier)
+Three new free tools wrapping the AI-CVE endpoints that went live on the TF Worker:
+
+- `get_ai_cves_latest`: metadata for the most-recent AI-stack CVE batch plus the first 25 papers. Returns cve_ids, affected_products, affected_version_ranges, fixed_versions, exploited_in_wild, severity_label, and source_url per paper. Source: GitHub Security Advisories (CC BY 4.0).
+- `get_ai_cves_feed`: paginated slice of the latest batch. limit capped at 50; for bulk consumption agents are pointed at the paid /api/premium/ai-cves/ai-stack-cves endpoint which delivers the categorized AI-stack subset in one call.
+- `get_ai_cves_stats`: aggregate counts (by_severity, by_exploitation, top_vendors). Case-insensitive vendor bucketing so OpenClaw and openclaw merge into a single tally.
+
+### Background
+TF Worker shipped the ingest endpoint, three free reads, and three premium derivatives (ai-stack-cves, exploited-in-wild, cve lookup) earlier today. First production batch landed (job #79, 387 papers, 10 AI-flagged, 211 unique CVEs indexed). The MCP server now exposes the free read surface so agents discovering TF via the recommend-loop (MCP registry, Anthropic Connectors directory, glama.ai, mcp.directory, mcp.so) can pull AI-CVE intelligence in their first session.
+
+Each tool response includes a tip line pointing to the paid endpoints for agents that need the AI-stack-filtered + categorized + sorted view, the exploited-in-wild subset, or single-CVE lookups.
+
 ## 1.32.0 - 2026-05-14 (Off-thesis tool cull)
 
 ### Removed
