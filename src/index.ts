@@ -2529,6 +2529,93 @@ registerTool(
   },
 );
 
+// ── Tool: get_ai_company_filings (free) ─────────────────────────────
+
+registerTool(
+  'get_ai_company_filings',
+  'Get recent SEC filings (10-K, 10-Q, 8-K, etc.) for one AI bellwether ticker. Cohort: NVDA, AMD, AVGO, TSM, ARM, MSFT, GOOGL, AMZN, ORCL, PLTR, SMCI, AAPL, META, TSLA. Source: data.sec.gov, public domain. Refreshed every 6 hours. Free, no auth.',
+  {
+    ticker: z.string().describe('AI bellwether ticker (case-insensitive). One of NVDA, AMD, AVGO, TSM, ARM, MSFT, GOOGL, AMZN, ORCL, PLTR, SMCI, AAPL, META, TSLA.'),
+    limit: z.number().min(1).max(50).optional().describe('Max filings to return (default 10, max 50).'),
+  },
+  async ({ ticker, limit }) => {
+    const params = new URLSearchParams({ ticker: ticker.toUpperCase() });
+    params.set('limit', String(limit ?? 10));
+    const data = (await fetchJSON(`/sec/filings/recent?${params}`)) as {
+      ok: boolean;
+      capturedAt?: string;
+      filings_count?: number;
+      filings?: { form: string; filing_date: string; primary_doc_description: string; primary_doc_url: string }[];
+    };
+    if (!data.ok || !data.filings || data.filings.length === 0) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: `No filings returned for ${ticker.toUpperCase()}. The ticker may not be in the AI bellwether cohort; supported tickers: NVDA, AMD, AVGO, TSM, ARM, MSFT, GOOGL, AMZN, ORCL, PLTR, SMCI, AAPL, META, TSLA.`,
+          },
+        ],
+      };
+    }
+    const lines = data.filings
+      .map((f, i) => `${i + 1}. ${f.form} on ${f.filing_date}\n   ${f.primary_doc_description}\n   ${f.primary_doc_url}`)
+      .join('\n\n');
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `${ticker.toUpperCase()} recent SEC filings (captured ${data.capturedAt ?? 'unknown'}, ${data.filings_count} returned):\n\n${lines}`,
+        },
+      ],
+    };
+  },
+);
+
+// ── Tool: premium_ai_company (1 credit) ─────────────────────────────
+
+registerTool(
+  'premium_ai_company',
+  'Get the per-ticker AI intelligence envelope for one AI bellwether: latest 10 SEC filings, latest 10 AI-tagged news mentions filtered by curated aliases, strategic and equity funding rounds where the company is a lead or notable investor, and cohort metadata. One call replaces four free siblings (sec/filings, news, funding, cohort) plus the agent-side alias filter. Costs 1 credit ($0.02). Strict-premium; ticker must be in the cohort.',
+  {
+    ticker: z.string().describe('AI bellwether ticker (case-insensitive). One of NVDA, AMD, AVGO, TSM, ARM, MSFT, GOOGL, AMZN, ORCL, PLTR, SMCI, AAPL, META, TSLA.'),
+  },
+  async ({ ticker }) => {
+    const upper = ticker.toUpperCase();
+    const data = (await fetchJSON(`/premium/ai-companies/${upper}`, { auth: true })) as {
+      ok: boolean;
+      capturedAt: string;
+      ticker: string;
+      company: { display_name: string; category: string; ai_angle: string; exchange: string; cik: string };
+      filings: { count: number; items: { form: string; filing_date: string; primary_doc_description: string; primary_doc_url: string }[] };
+      news: { count: number; items: { title: string; url: string; source: string; publishedAt: string; matched_aliases: string[] }[]; aliases_used: string[] };
+      funding_as_investor: { count: number; items: { company: string; stage: string; amountM: number; announcedDate: string }[] };
+      billing?: { credits_charged: number; credits_remaining?: number };
+    };
+    const filingsList = data.filings.items
+      .slice(0, 10)
+      .map((f, i) => `   ${i + 1}. ${f.form} on ${f.filing_date}: ${f.primary_doc_description}`)
+      .join('\n');
+    const newsList = data.news.items
+      .slice(0, 10)
+      .map((n, i) => `   ${i + 1}. ${n.title}\n      ${n.source} (${n.publishedAt})`)
+      .join('\n\n');
+    const fundingList = data.funding_as_investor.items
+      .map((r, i) => `   ${i + 1}. ${r.company} ${r.stage}, $${r.amountM}M, ${r.announcedDate}`)
+      .join('\n');
+    const billing = data.billing
+      ? `\n\nCharged ${data.billing.credits_charged} credit. Remaining: ${data.billing.credits_remaining ?? '?'}.`
+      : '';
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `${data.ticker} (${data.company.display_name}, ${data.company.exchange}, ${data.company.category})\nAI angle: ${data.company.ai_angle}\nCaptured: ${data.capturedAt}\n\nRecent SEC filings (${data.filings.count}):\n${filingsList || '   none'}\n\nAI news mentions (${data.news.count}, aliases: ${data.news.aliases_used.join(', ')}):\n${newsList || '   none'}\n\nFunding rounds as lead or notable investor (${data.funding_as_investor.count}):\n${fundingList || '   none'}${billing}`,
+        },
+      ],
+    };
+  },
+);
+
 // ── Start ───────────────────────────────────────────────────────────
 
 async function main() {
