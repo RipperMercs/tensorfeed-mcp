@@ -2616,6 +2616,235 @@ registerTool(
   },
 );
 
+// ── Tool: get_x402_summary (free) ───────────────────────────────────
+
+registerTool(
+  'get_x402_summary',
+  'Get ecosystem-level x402 USDC settlement rollup on Base mainnet. Returns volume_usdc, count, unique_publishers, and change_vs_prior_window across a 24h, 7d, or 30d window. TensorFeed indexes Base USDC Transfer events filtered to wallets self-published by x402-compliant publishers in their /.well-known/x402.json manifests. Forward-only from 2026-05-28; ~6 min worst-case freshness (10 min SLA). Free, capped to one window per call.',
+  {
+    window: z.enum(['24h', '7d', '30d']).optional().describe('Aggregation window. Defaults to 24h if omitted.'),
+  },
+  async ({ window }) => {
+    const w = window ?? '24h';
+    const data = (await fetchJSON(`/x402-index/summary?window=${w}`)) as {
+      window: string;
+      captured_at: string;
+      volume_usdc: string;
+      count: number;
+      unique_publishers: number;
+      change_vs_prior_window: { volume_pct: number; count_pct: number };
+    };
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `x402 settlement rollup (window ${data.window}, captured ${data.captured_at}):\n  volume_usdc: ${data.volume_usdc}\n  count: ${data.count}\n  unique_publishers: ${data.unique_publishers}\n  change vs prior window: volume ${data.change_vs_prior_window.volume_pct}%, count ${data.change_vs_prior_window.count_pct}%`,
+        },
+      ],
+    };
+  },
+);
+
+// ── Tool: get_x402_publishers (free) ────────────────────────────────
+
+registerTool(
+  'get_x402_publishers',
+  'List x402-compliant publishers TensorFeed currently indexes. Each entry: domain, pay_to_wallets, first_seen, last_crawled, last_event_at, last_crawl_error. Publishers are auto-discovered daily via /.well-known/x402.json crawls. Use this to enumerate which publishers can then be queried in depth via premium_x402_publisher_receipts. Free, no input.',
+  {},
+  async () => {
+    const data = (await fetchJSON('/x402-index/publishers')) as {
+      captured_at: string;
+      count: number;
+      publishers: {
+        domain: string;
+        pay_to_wallets: string[];
+        first_seen: string;
+        last_crawled?: string;
+        last_event_at?: string;
+        last_crawl_error?: string;
+      }[];
+    };
+    if (data.count === 0) {
+      return { content: [{ type: 'text' as const, text: 'No x402 publishers indexed yet.' }] };
+    }
+    const lines = data.publishers
+      .map(
+        (p, i) =>
+          `${i + 1}. ${p.domain}\n   wallets: ${p.pay_to_wallets.join(', ')}\n   first_seen: ${p.first_seen}${p.last_event_at ? `\n   last_event_at: ${p.last_event_at}` : ''}${p.last_crawled ? `\n   last_crawled: ${p.last_crawled}` : ''}${p.last_crawl_error ? `\n   last_crawl_error: ${p.last_crawl_error}` : ''}`,
+      )
+      .join('\n\n');
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `x402 publishers (${data.count}, captured ${data.captured_at}):\n\n${lines}`,
+        },
+      ],
+    };
+  },
+);
+
+// ── Tool: get_x402_leaderboard (free) ───────────────────────────────
+
+registerTool(
+  'get_x402_leaderboard',
+  'Top publishers by x402 USDC settlement volume across a 24h, 7d, or 30d window. Each leader: rank, domain, volume_usdc, count, share_pct of the sliced total. Limit clamped 1 to 25. Useful for surfacing which x402 services are receiving the most agent traffic. Free.',
+  {
+    window: z.enum(['24h', '7d', '30d']).optional().describe('Aggregation window. Defaults to 24h.'),
+    limit: z.number().min(1).max(25).optional().describe('Top N publishers to return. Default 10, max 25.'),
+  },
+  async ({ window, limit }) => {
+    const w = window ?? '24h';
+    const l = limit ?? 10;
+    const data = (await fetchJSON(`/x402-index/leaderboard?window=${w}&limit=${l}`)) as {
+      window: string;
+      captured_at: string;
+      leaders: { rank: number; domain: string; volume_usdc: string; count: number; share_pct: number }[];
+    };
+    if (data.leaders.length === 0) {
+      return { content: [{ type: 'text' as const, text: `No x402 leaders for window ${data.window}.` }] };
+    }
+    const lines = data.leaders
+      .map((e) => `  ${e.rank}. ${e.domain}: $${e.volume_usdc} across ${e.count} settlements (${e.share_pct}% share)`)
+      .join('\n');
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `x402 leaderboard (window ${data.window}, captured ${data.captured_at}):\n${lines}`,
+        },
+      ],
+    };
+  },
+);
+
+// ── Tool: get_x402_recent (free) ────────────────────────────────────
+
+registerTool(
+  'get_x402_recent',
+  'Most recent x402 USDC settlement events newest-first. Each event: tx_hash, block, ts, from_address, to_address, amount_usdc, publisher_domain, base_explorer_url (basescan.org link). Backed by a 100-event ring buffer updated on every indexer cron tick. Limit clamped 1 to 50, default 20. Free.',
+  {
+    limit: z.number().min(1).max(50).optional().describe('Number of most-recent events. Default 20, max 50.'),
+  },
+  async ({ limit }) => {
+    const l = limit ?? 20;
+    const data = (await fetchJSON(`/x402-index/recent?limit=${l}`)) as {
+      captured_at: string;
+      count: number;
+      events: {
+        tx_hash: string;
+        block: number;
+        ts: string;
+        from_address: string;
+        to_address: string;
+        amount_usdc: string;
+        publisher_domain: string;
+        base_explorer_url: string;
+      }[];
+    };
+    if (data.count === 0) {
+      return { content: [{ type: 'text' as const, text: 'No recent x402 settlement events.' }] };
+    }
+    const lines = data.events
+      .map(
+        (e, i) =>
+          `${i + 1}. ${e.ts} block ${e.block}\n   ${e.publisher_domain}: $${e.amount_usdc} USDC\n   from ${e.from_address} to ${e.to_address}\n   ${e.base_explorer_url}`,
+      )
+      .join('\n\n');
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Recent x402 settlements (${data.count}, captured ${data.captured_at}):\n\n${lines}`,
+        },
+      ],
+    };
+  },
+);
+
+// ── Tool: premium_x402_publisher_receipts (1 credit) ────────────────
+
+registerTool(
+  'premium_x402_publisher_receipts',
+  'Per-publisher receipt feed for one x402-compliant domain across a from/to date range. Returns publisher meta (domain, pay_to_wallets, first_seen), window rollup (volume_usdc, count, avg_amount, daily_series), and attribution. \n\nVS FREE: get_x402_publishers tells you WHICH publishers exist but only with rolled-up scalar counters. This endpoint composes the per-day rollup across a date range with avg_amount, daily series for charts, and structured attribution license metadata in one paid call. An agent building a per-publisher analytics dashboard would otherwise need to call get_x402_publishers + reconstruct daily series from get_x402_summary per-day (impossible because /summary returns ecosystem totals not per-publisher) or wait for the next free-tier expansion. The premium endpoint saves the integration overhead and serves a forensic / compliance-grade payload for $0.02. \n\nForward-only index. Costs 1 credit ($0.02). Strict-premium; domain must exist in get_x402_publishers, otherwise 404.',
+  {
+    domain: z.string().describe('Publisher domain to query, e.g. tensorfeed.ai. Must exist in get_x402_publishers result.'),
+    from: z.string().describe('Inclusive start date YYYY-MM-DD.'),
+    to: z.string().describe('Inclusive end date YYYY-MM-DD.'),
+  },
+  async ({ domain, from, to }) => {
+    const params = new URLSearchParams({ from, to });
+    const data = (await fetchJSON(`/premium/x402-index/publisher/${encodeURIComponent(domain)}?${params}`, { auth: true })) as {
+      publisher: { domain: string; pay_to_wallets: string[]; first_seen: string };
+      window: { from: string; to: string; days: number };
+      rollup: {
+        volume_usdc: string;
+        count: number;
+        avg_amount: string;
+        daily_series: { date: string; volume_usdc: string; count: number }[];
+      };
+      attribution: string;
+      license: string;
+      billing?: { credits_charged: number; credits_remaining?: number };
+    };
+    const series = data.rollup.daily_series
+      .map((d) => `   ${d.date}: $${d.volume_usdc} across ${d.count}`)
+      .join('\n');
+    const billing = data.billing
+      ? `\n\nCharged ${data.billing.credits_charged} credit. Remaining: ${data.billing.credits_remaining ?? '?'}.`
+      : '';
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `${data.publisher.domain} (first_seen ${data.publisher.first_seen})\nwallets: ${data.publisher.pay_to_wallets.join(', ')}\nwindow: ${data.window.from} to ${data.window.to} (${data.window.days} days)\n\nRollup:\n  volume_usdc: ${data.rollup.volume_usdc}\n  count: ${data.rollup.count}\n  avg_amount: ${data.rollup.avg_amount}\n\nDaily series:\n${series || '   none'}\n\nAttribution: ${data.attribution}\nLicense: ${data.license}${billing}`,
+        },
+      ],
+    };
+  },
+);
+
+// ── Tool: premium_x402_series (1 credit) ────────────────────────────
+
+registerTool(
+  'premium_x402_series',
+  'Time-series of ecosystem or per-publisher x402 settlement volume or count across a from/to date range, chart-feeding. Required: metric (volume or count), granularity (day or hour), from + to (YYYY-MM-DD). Optional: domain filter (omit for ecosystem). \n\nVS FREE: get_x402_summary returns one rolled-up scalar per call for a fixed window length (24h / 7d / 30d). For ANY chart or dashboard, the caller needs a series, not a scalar. The premium endpoint returns the full series in one call instead of N calls + N rate-limit budget burns. For a publisher-scoped series, it is the ONLY way to get per-publisher daily data (get_x402_summary is ecosystem-only). \n\nMVP supports granularity=day; hour returns an empty series with an attribution note (hourly rollups land in a future indexer version). Costs 1 credit ($0.02).',
+  {
+    metric: z.enum(['volume', 'count']).describe('Which series to return.'),
+    granularity: z.enum(['day', 'hour']).describe('Bucket size. MVP: day only; hour returns empty series.'),
+    from: z.string().describe('Inclusive start date YYYY-MM-DD.'),
+    to: z.string().describe('Inclusive end date YYYY-MM-DD.'),
+    domain: z.string().optional().describe('Optional publisher domain filter. Omit for ecosystem-wide series.'),
+  },
+  async ({ metric, granularity, from, to, domain }) => {
+    const params = new URLSearchParams({ metric, granularity, from, to });
+    if (domain) params.set('domain', domain);
+    const data = (await fetchJSON(`/premium/x402-index/series?${params}`, { auth: true })) as {
+      metric: string;
+      granularity: string;
+      window: { from: string; to: string };
+      series: { ts: string; value: string | number }[];
+      attribution: string;
+      billing?: { credits_charged: number; credits_remaining?: number };
+    };
+    const scope = domain ? `domain=${domain}` : 'ecosystem-wide';
+    const seriesLines = data.series.length
+      ? data.series.map((p) => `   ${p.ts}: ${p.value}`).join('\n')
+      : '   (empty)';
+    const billing = data.billing
+      ? `\n\nCharged ${data.billing.credits_charged} credit. Remaining: ${data.billing.credits_remaining ?? '?'}.`
+      : '';
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `x402 ${data.metric} series (${data.granularity}, ${scope})\nwindow: ${data.window.from} to ${data.window.to}\n\nSeries:\n${seriesLines}\n\nAttribution: ${data.attribution}${billing}`,
+        },
+      ],
+    };
+  },
+);
+
 // ── Start ───────────────────────────────────────────────────────────
 
 async function main() {

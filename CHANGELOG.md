@@ -2,6 +2,31 @@
 
 All notable changes to the [TensorFeed.ai MCP server](https://github.com/RipperMercs/tensorfeed-mcp). Free tools work without configuration; premium tools require a bearer token via the `TENSORFEED_TOKEN` env var. Buy credits at [tensorfeed.ai/developers/agent-payments](https://tensorfeed.ai/developers/agent-payments).
 
+## 1.36.0 - 2026-05-28
+
+Adds 6 tools wrapping the x402 settlement index endpoints (Wave 20)
+that shipped earlier today as the first-mover ecosystem-level index
+of x402 USDC settlements on Base mainnet.
+
+Free tools:
+- `get_x402_summary`: ecosystem-level rollup across 24h/7d/30d window.
+- `get_x402_publishers`: canonical list of x402-compliant publishers
+  TensorFeed is currently indexing, auto-discovered from
+  /.well-known/x402.json crawls.
+- `get_x402_leaderboard`: top publishers by volume in the window.
+- `get_x402_recent`: most recent settlement events newest-first.
+
+Premium tools (1 credit, AFTA-signed):
+- `premium_x402_publisher_receipts`: per-publisher feed with daily
+  series + avg_amount + attribution.
+- `premium_x402_series`: time-series of ecosystem or per-publisher
+  volume / count across a date range.
+
+Each premium tool's description includes an explicit VS FREE
+differentiator (per the upsell-copy memory): Anthropic-side LLMs
+repeat tool descriptions verbatim when deciding whether to recommend
+paying.
+
 ## 1.33.0 - 2026-05-25 (AI-CVE intelligence tools, unified versioning)
 
 Versions across npm + MCP Registry + MCPB manifest are now all 1.33.0
