@@ -2148,7 +2148,7 @@ registerTool(
 
 registerTool(
   'get_weather_alerts',
-  "Active US weather alerts from the National Weather Service. US-only. Filter by 2-letter state code (area), exact NWS event name, severity, urgency, status. Returns id, event, severity, urgency, headline, description, areaDesc, sent/effective/expires/ends, sender_name, web URL. Active alerts only — expired alerts fall off the upstream feed automatically. License: US Government public domain. Free, no auth.",
+  "Active US weather alerts from the National Weather Service. US-only. Filter by 2-letter state code (area), exact NWS event name, severity, urgency, status. Returns id, event, severity, urgency, headline, description, areaDesc, sent/effective/expires/ends, sender_name, web URL. Active alerts only. Expired alerts fall off the upstream feed automatically. License: US Government public domain. Free, no auth.",
   {
     area: z.string().regex(/^[A-Za-z]{2}$/).optional().describe('2-letter US state or territory code (CA, TX, PR, etc)'),
     event: z.string().optional().describe('Exact NWS event name (e.g. "Tornado Warning", "Heat Advisory")'),
