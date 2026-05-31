@@ -2,6 +2,21 @@
 
 All notable changes to the [TensorFeed.ai MCP server](https://github.com/RipperMercs/tensorfeed-mcp). Free tools work without configuration; premium tools require a bearer token via the `TENSORFEED_TOKEN` env var. Buy credits at [tensorfeed.ai/developers/agent-payments](https://tensorfeed.ai/developers/agent-payments).
 
+## 1.36.1 - 2026-05-31
+
+Security hardening only. No API changes; agents see the same tools.
+
+- The `latest_news` resource output is now sanitized like every tool
+  output, so external RSS titles cannot carry prompt-injection markers
+  to the model.
+- Tool output is capped at 40000 characters and the x402 publishers and
+  agent reputation renderers are bounded, so a large upstream response
+  cannot overflow the agent's context window.
+- Path parameters (watch id, company ticker) are now URL-encoded and
+  schema-validated before they reach a request path.
+- Reconciled the stated credit cost on the free pricing, benchmark, and
+  status series pointers (they correctly read 2 credits now).
+
 ## 1.36.0 - 2026-05-28
 
 Adds 6 tools wrapping the x402 settlement index endpoints (Wave 20)
