@@ -2,6 +2,21 @@
 
 All notable changes to the [TensorFeed.ai MCP server](https://github.com/RipperMercs/tensorfeed-mcp). Free tools work without configuration; premium tools require a bearer token via the `TENSORFEED_TOKEN` env var. Buy credits at [tensorfeed.ai/developers/agent-payments](https://tensorfeed.ai/developers/agent-payments).
 
+## 1.36.2 - 2026-05-31
+
+Pricing-copy and catalog-accuracy corrections. No change to the free/paid
+split or the actual on-chain charge.
+
+- Corrected the stated credit cost on `pricing_series`, `benchmark_series`,
+  and `status_uptime` and their free-sibling pointers back to 1 credit
+  ($0.02). These are Tier 2, which maps to 1 credit in TIER_COSTS; release
+  1.36.1 had wrongly relabeled them 2 credits.
+- Catalog accuracy: `server.json` now lists the true 59 tools (36 free,
+  23 premium), adding 5 free tools that were omitted (`get_model_deprecations`,
+  `get_ai_supply_chain_iocs`, `get_honeypot_iocs`, `check_afta_certification`,
+  `get_agent_reputation_card`) and removing the phantom `mcp_registry_series`;
+  the manifest long_description now reads 59 tools.
+
 ## 1.36.1 - 2026-05-31
 
 Security hardening only. No API changes; agents see the same tools.
@@ -14,10 +29,6 @@ Security hardening only. No API changes; agents see the same tools.
   cannot overflow the agent's context window.
 - Path parameters (watch id, company ticker) are now URL-encoded and
   schema-validated before they reach a request path.
-- Corrected the stated credit cost on the pricing, benchmark, and status
-  series tools and their free-sibling pointers. These are Tier 2, which
-  maps to 1 credit ($0.02) in TIER_COSTS, so they now correctly read
-  1 credit; an earlier release had wrongly relabeled them 2 credits.
 
 ## 1.36.0 - 2026-05-28
 
