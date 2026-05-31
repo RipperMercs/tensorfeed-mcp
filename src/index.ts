@@ -11,6 +11,12 @@ import { sanitizeToolResponse } from './sanitize.js';
 
 const API_BASE = 'https://tensorfeed.ai/api';
 
+// Per-request upstream timeout. fetchJSON is the single HTTP helper behind every
+// MCP tool and the latest_news resource, so a missing timeout would let one
+// stalled upstream hang an agent's tool call. 20s is generous for the slowest
+// premium endpoint while still failing fast on a genuine stall.
+const REQUEST_TIMEOUT_MS = 20000;
+
 const pkgPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json');
 const SDK_VERSION = (JSON.parse(readFileSync(pkgPath, 'utf-8')) as { version: string }).version;
 
@@ -38,11 +44,27 @@ async function fetchJSON(path: string, opts: FetchOptions = {}): Promise<unknown
     }
     headers['Authorization'] = `Bearer ${token}`;
   }
-  const res = await fetch(`${API_BASE}${path}`, {
-    method: opts.method ?? 'GET',
-    headers,
-    ...(opts.body !== undefined ? { body: JSON.stringify(opts.body) } : {}),
-  });
+  // Bound every request with a timeout so a stalled upstream (TLS or connect
+  // hang, slow Worker, KV or origin stall) cannot hang the agent's tool call
+  // indefinitely. An aborted fetch surfaces as a clean Error below instead of
+  // an open-ended await.
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, {
+      method: opts.method ?? 'GET',
+      headers,
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      ...(opts.body !== undefined ? { body: JSON.stringify(opts.body) } : {}),
+    });
+  } catch (err) {
+    // AbortSignal.timeout fires a TimeoutError (DOMException name 'TimeoutError');
+    // a manual abort surfaces as 'AbortError'. Either way, rethrow a clean Error
+    // so it reaches the agent as a normal MCP tool error rather than a raw abort.
+    if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+      throw new Error(`TensorFeed upstream request timed out after ${REQUEST_TIMEOUT_MS / 1000}s`);
+    }
+    throw err;
+  }
   if (!res.ok) {
     let errPayload: unknown;
     try {
