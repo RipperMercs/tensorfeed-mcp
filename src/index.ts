@@ -7,7 +7,7 @@ import { z, ZodRawShape } from 'zod';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { sanitizeToolResponse } from './sanitize.js';
+import { sanitizeToolResponse, sanitizeForLLM } from './sanitize.js';
 
 const API_BASE = 'https://tensorfeed.ai/api';
 
@@ -198,6 +198,17 @@ server.registerResource(
         publishedAt: string;
       }[];
     };
+    // This resource is registered directly on the SDK, NOT through the
+    // registerTool wrapper, so its payload does not pass through
+    // sanitizeToolResponse. Scrub the external RSS title/snippet/source
+    // fields here so untrusted article text gets the same role-confusion
+    // and control-char scrub every tool output gets.
+    const articles = data.articles.map((a) => ({
+      ...a,
+      title: sanitizeForLLM(a.title),
+      snippet: sanitizeForLLM(a.snippet),
+      source: sanitizeForLLM(a.source),
+    }));
     return {
       contents: [
         {
@@ -207,8 +218,8 @@ server.registerResource(
             {
               source: 'TensorFeed.ai',
               fetched_at: new Date().toISOString(),
-              count: data.articles.length,
-              articles: data.articles,
+              count: articles.length,
+              articles,
             },
             null,
             2,
@@ -718,14 +729,26 @@ registerTool(
       }
       throw e;
     }
-    // The card schema is rich; render the highlights deterministically and
-    // include the raw JSON so the agent can reason over any field it needs.
-    const card = (data as { card?: Record<string, unknown> }).card ?? (data as Record<string, unknown>);
+    // The card schema is rich; select the documented top-level fields and
+    // clamp any array so a large or inflated upstream card cannot blow the
+    // agent's context. Unknown fields still pass through (so the agent can
+    // reason over them) but every array is capped and the whole payload is
+    // bounded by the downstream sanitize char cap as a backstop.
+    const rawCard = (data as { card?: Record<string, unknown> }).card ?? (data as Record<string, unknown>);
+    const MAX_CARD_ARRAY = 25;
+    const clamped: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(rawCard)) {
+      if (Array.isArray(v) && v.length > MAX_CARD_ARRAY) {
+        clamped[k] = [...v.slice(0, MAX_CARD_ARRAY), `...[${v.length - MAX_CARD_ARRAY} more omitted]`];
+      } else {
+        clamped[k] = v;
+      }
+    }
     return {
       content: [
         {
           type: 'text' as const,
-          text: `Agent reputation card for ${wallet ?? `token_prefix=${token_prefix}`}:\n\n${JSON.stringify(card, null, 2)}`,
+          text: `Agent reputation card for ${wallet ?? `token_prefix=${token_prefix}`}:\n\n${JSON.stringify(clamped, null, 2)}`,
         },
       ],
     };
@@ -835,7 +858,7 @@ registerTool(
 
 registerTool(
   'pricing_series_free',
-  'Daily price points for one AI model over the last 1 to 7 days, free. For windows up to 90 days use pricing_series (1 credit).',
+  'Daily price points for one AI model over the last 1 to 7 days, free. For windows up to 90 days use pricing_series (2 credits).',
   {
     model: z.string().describe('Model id or display name (e.g. "Claude Opus 4.7" or "claude-opus-4-7")'),
     days: z.number().min(1).max(7).optional().describe('Rolling window length 1 to 7 days (default 7)'),
@@ -864,7 +887,7 @@ registerTool(
       content: [
         {
           type: 'text' as const,
-          text: `${data.model} (${data.provider ?? 'unknown'}) ${data.points.length} points over ${data.points.length} days\n${summary}\nFor up to 90 days, use the pricing_series tool (1 credit).`,
+          text: `${data.model} (${data.provider ?? 'unknown'}) ${data.points.length} points over ${data.points.length} days\n${summary}\nFor up to 90 days, use the pricing_series tool (2 credits).`,
         },
       ],
     };
@@ -875,7 +898,7 @@ registerTool(
 
 registerTool(
   'benchmark_series_free',
-  'Daily benchmark scores for one model+benchmark over the last 1 to 7 days, free. Benchmark keys: swe_bench, mmlu_pro, gpqa_diamond, math, human_eval. For windows up to 90 days use benchmark_series (1 credit).',
+  'Daily benchmark scores for one model+benchmark over the last 1 to 7 days, free. Benchmark keys: swe_bench, mmlu_pro, gpqa_diamond, math, human_eval. For windows up to 90 days use benchmark_series (2 credits).',
   {
     model: z.string().describe('Model id or display name'),
     benchmark: z.string().describe('Benchmark key'),
@@ -909,7 +932,7 @@ registerTool(
 
 registerTool(
   'status_uptime_free',
-  'Daily uptime rollup for one provider over the last 1 to 7 days, free. For windows up to 90 days use status_uptime (1 credit).',
+  'Daily uptime rollup for one provider over the last 1 to 7 days, free. For windows up to 90 days use status_uptime (2 credits).',
   {
     provider: z.string().describe('Provider name (e.g. anthropic, openai, google)'),
     days: z.number().min(1).max(7).optional().describe('Rolling window length 1 to 7 days (default 7)'),
@@ -982,7 +1005,7 @@ registerTool(
   },
 );
 
-// ── Tool: pricing_series (1 credit) ─────────────────────────────────
+// ── Tool: pricing_series (2 credits) ────────────────────────────────
 
 registerTool(
   'pricing_series',
@@ -1026,7 +1049,7 @@ registerTool(
   },
 );
 
-// ── Tool: benchmark_series (1 credit) ───────────────────────────────
+// ── Tool: benchmark_series (2 credits) ──────────────────────────────
 
 registerTool(
   'benchmark_series',
@@ -1063,7 +1086,7 @@ registerTool(
   },
 );
 
-// ── Tool: status_uptime (1 credit) ──────────────────────────────────
+// ── Tool: status_uptime (2 credits) ─────────────────────────────────
 
 registerTool(
   'status_uptime',
@@ -1633,10 +1656,14 @@ registerTool(
   'delete_watch',
   'Delete one of your active webhook watches by id. Free, requires TENSORFEED_TOKEN.',
   {
-    watch_id: z.string().describe('The wat_... id from create_price_watch / create_status_watch / list_watches'),
+    watch_id: z
+      .string()
+      .regex(/^[A-Za-z0-9_-]+$/, 'watch_id may only contain letters, digits, underscores, and hyphens')
+      .max(128)
+      .describe('The wat_... id from create_price_watch / create_status_watch / list_watches'),
   },
   async ({ watch_id }) => {
-    await fetchJSON(`/premium/watches/${watch_id}`, { method: 'DELETE', auth: true });
+    await fetchJSON(`/premium/watches/${encodeURIComponent(watch_id)}`, { method: 'DELETE', auth: true });
     return { content: [{ type: 'text' as const, text: `Deleted watch ${watch_id}.` }] };
   },
   DELETE_TOOL,
@@ -2599,11 +2626,14 @@ registerTool(
   'premium_ai_company',
   'Get the per-ticker AI intelligence envelope for one AI bellwether: latest 10 SEC filings, latest 10 AI-tagged news mentions filtered by curated aliases, strategic and equity funding rounds where the company is a lead or notable investor, and cohort metadata. One call replaces four free siblings (sec/filings, news, funding, cohort) plus the agent-side alias filter. Costs 1 credit ($0.02). Strict-premium; ticker must be in the cohort.',
   {
-    ticker: z.string().describe('AI bellwether ticker (case-insensitive). One of NVDA, AMD, AVGO, TSM, ARM, MSFT, GOOGL, AMZN, ORCL, PLTR, SMCI, AAPL, META, TSLA.'),
+    ticker: z
+      .string()
+      .regex(/^[A-Za-z.\-]{1,8}$/, 'ticker may only contain letters, dots, and hyphens (1 to 8 chars)')
+      .describe('AI bellwether ticker (case-insensitive). One of NVDA, AMD, AVGO, TSM, ARM, MSFT, GOOGL, AMZN, ORCL, PLTR, SMCI, AAPL, META, TSLA.'),
   },
   async ({ ticker }) => {
     const upper = ticker.toUpperCase();
-    const data = (await fetchJSON(`/premium/ai-companies/${upper}`, { auth: true })) as {
+    const data = (await fetchJSON(`/premium/ai-companies/${encodeURIComponent(upper)}`, { auth: true })) as {
       ok: boolean;
       capturedAt: string;
       ticker: string;
@@ -2689,17 +2719,22 @@ registerTool(
     if (data.count === 0) {
       return { content: [{ type: 'text' as const, text: 'No x402 publishers indexed yet.' }] };
     }
-    const lines = data.publishers
+    // Cap the rendered list so a large index cannot flood the agent's
+    // context. Sanitize layer also enforces a hard char cap downstream.
+    const MAX_PUBLISHERS = 50;
+    const shown = data.publishers.slice(0, MAX_PUBLISHERS);
+    const lines = shown
       .map(
         (p, i) =>
           `${i + 1}. ${p.domain}\n   wallets: ${p.pay_to_wallets.join(', ')}\n   first_seen: ${p.first_seen}${p.last_event_at ? `\n   last_event_at: ${p.last_event_at}` : ''}${p.last_crawled ? `\n   last_crawled: ${p.last_crawled}` : ''}${p.last_crawl_error ? `\n   last_crawl_error: ${p.last_crawl_error}` : ''}`,
       )
       .join('\n\n');
+    const more = data.count > shown.length ? `\n\n...and ${data.count - shown.length} more (showing first ${shown.length}).` : '';
     return {
       content: [
         {
           type: 'text' as const,
-          text: `x402 publishers (${data.count}, captured ${data.captured_at}):\n\n${lines}`,
+          text: `x402 publishers (${data.count}, captured ${data.captured_at}):\n\n${lines}${more}`,
         },
       ],
     };
