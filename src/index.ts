@@ -858,7 +858,7 @@ registerTool(
 
 registerTool(
   'pricing_series_free',
-  'Daily price points for one AI model over the last 1 to 7 days, free. For windows up to 90 days use pricing_series (2 credits).',
+  'Daily price points for one AI model over the last 1 to 7 days, free. For windows up to 90 days use pricing_series (1 credit).',
   {
     model: z.string().describe('Model id or display name (e.g. "Claude Opus 4.7" or "claude-opus-4-7")'),
     days: z.number().min(1).max(7).optional().describe('Rolling window length 1 to 7 days (default 7)'),
@@ -887,7 +887,7 @@ registerTool(
       content: [
         {
           type: 'text' as const,
-          text: `${data.model} (${data.provider ?? 'unknown'}) ${data.points.length} points over ${data.points.length} days\n${summary}\nFor up to 90 days, use the pricing_series tool (2 credits).`,
+          text: `${data.model} (${data.provider ?? 'unknown'}) ${data.points.length} points over ${data.points.length} days\n${summary}\nFor up to 90 days, use the pricing_series tool (1 credit).`,
         },
       ],
     };
@@ -898,7 +898,7 @@ registerTool(
 
 registerTool(
   'benchmark_series_free',
-  'Daily benchmark scores for one model+benchmark over the last 1 to 7 days, free. Benchmark keys: swe_bench, mmlu_pro, gpqa_diamond, math, human_eval. For windows up to 90 days use benchmark_series (2 credits).',
+  'Daily benchmark scores for one model+benchmark over the last 1 to 7 days, free. Benchmark keys: swe_bench, mmlu_pro, gpqa_diamond, math, human_eval. For windows up to 90 days use benchmark_series (1 credit).',
   {
     model: z.string().describe('Model id or display name'),
     benchmark: z.string().describe('Benchmark key'),
@@ -932,7 +932,7 @@ registerTool(
 
 registerTool(
   'status_uptime_free',
-  'Daily uptime rollup for one provider over the last 1 to 7 days, free. For windows up to 90 days use status_uptime (2 credits).',
+  'Daily uptime rollup for one provider over the last 1 to 7 days, free. For windows up to 90 days use status_uptime (1 credit).',
   {
     provider: z.string().describe('Provider name (e.g. anthropic, openai, google)'),
     days: z.number().min(1).max(7).optional().describe('Rolling window length 1 to 7 days (default 7)'),
@@ -1005,11 +1005,11 @@ registerTool(
   },
 );
 
-// ── Tool: pricing_series (2 credits) ────────────────────────────────
+// ── Tool: pricing_series (1 credit) ─────────────────────────────────
 
 registerTool(
   'pricing_series',
-  'Daily price points for one AI model with min/max/delta summary. Default range = last 30 days, max 90 days. Costs 2 credits ($0.04). Strict premium, no free trial; the 7-day-capped sibling pricing_series_free is the discovery option.',
+  'Daily price points for one AI model with min/max/delta summary. Default range = last 30 days, max 90 days. Costs 1 credit ($0.02). Strict premium, no free trial; the 7-day-capped sibling pricing_series_free is the discovery option.',
   {
     model: z.string().describe('Model id or display name (e.g. "Claude Opus 4.7" or "claude-opus-4-7")'),
     from: z.string().optional().describe('Start date YYYY-MM-DD UTC (default: 30 days ago)'),
@@ -1049,11 +1049,11 @@ registerTool(
   },
 );
 
-// ── Tool: benchmark_series (2 credits) ──────────────────────────────
+// ── Tool: benchmark_series (1 credit) ───────────────────────────────
 
 registerTool(
   'benchmark_series',
-  'Score evolution for a single benchmark on one AI model. Costs 2 credits ($0.04). Strict premium, no free trial; the 7-day-capped sibling benchmark_series_free is the discovery option. Benchmark keys: swe_bench, mmlu_pro, gpqa_diamond, math, human_eval.',
+  'Score evolution for a single benchmark on one AI model. Costs 1 credit ($0.02). Strict premium, no free trial; the 7-day-capped sibling benchmark_series_free is the discovery option. Benchmark keys: swe_bench, mmlu_pro, gpqa_diamond, math, human_eval.',
   {
     model: z.string().describe('Model id or display name'),
     benchmark: z.string().describe('Benchmark key (e.g. swe_bench, mmlu_pro, gpqa_diamond, math, human_eval)'),
@@ -1086,11 +1086,11 @@ registerTool(
   },
 );
 
-// ── Tool: status_uptime (2 credits) ─────────────────────────────────
+// ── Tool: status_uptime (1 credit) ──────────────────────────────────
 
 registerTool(
   'status_uptime',
-  'Daily uptime rollup for one provider with operational/degraded/down day counts and uptime % (degraded counts as half-credit). Costs 2 credits ($0.04). Strict premium, no free trial; the 7-day-capped sibling status_uptime_free is the discovery option.',
+  'Daily uptime rollup for one provider with operational/degraded/down day counts and uptime % (degraded counts as half-credit). Costs 1 credit ($0.02). Strict premium, no free trial; the 7-day-capped sibling status_uptime_free is the discovery option.',
   {
     provider: z.string().describe('Provider name (e.g. anthropic, openai, google)'),
     from: z.string().optional().describe('Start date YYYY-MM-DD UTC (default: 30 days ago)'),

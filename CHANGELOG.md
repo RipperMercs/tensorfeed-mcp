@@ -14,8 +14,10 @@ Security hardening only. No API changes; agents see the same tools.
   cannot overflow the agent's context window.
 - Path parameters (watch id, company ticker) are now URL-encoded and
   schema-validated before they reach a request path.
-- Reconciled the stated credit cost on the free pricing, benchmark, and
-  status series pointers (they correctly read 2 credits now).
+- Corrected the stated credit cost on the pricing, benchmark, and status
+  series tools and their free-sibling pointers. These are Tier 2, which
+  maps to 1 credit ($0.02) in TIER_COSTS, so they now correctly read
+  1 credit; an earlier release had wrongly relabeled them 2 credits.
 
 ## 1.36.0 - 2026-05-28
 
@@ -74,14 +76,14 @@ Premium endpoint audit (2026-05-14) through the lens "does this clearly save the
 ### Changed (pricing)
 Six tools mapping to strict-premium TF Worker endpoints are repriced from Tier 1 ($0.02) into higher tiers reflecting the curated-derived-metrics value they provide. Tool descriptions updated to advertise the new prices:
 
-- `pricing_series`: 1 credit ($0.02) -> 2 credits ($0.04)
-- `benchmark_series`: 1 credit ($0.02) -> 2 credits ($0.04)
-- `status_uptime`: 1 credit ($0.02) -> 2 credits ($0.04)
-- `status_leaderboard`: 1 credit ($0.02) -> 3 credits ($0.06)
-- `provider_deepdive`: 1 credit ($0.02) -> 3 credits ($0.06)
-- `probe_series_premium`: 1 credit ($0.02) -> 3 credits ($0.06)
+- `pricing_series`: Tier 2, 1 credit ($0.02)
+- `benchmark_series`: Tier 2, 1 credit ($0.02)
+- `status_uptime`: Tier 2, 1 credit ($0.02)
+- `status_leaderboard`: Tier 3, 5 credits ($0.10)
+- `provider_deepdive`: Tier 3, 5 credits ($0.10)
+- `probe_series_premium`: Tier 3, 5 credits ($0.10)
 
-Tier 2 ($0.04) tools are single-entity full-window historical lookups. Tier 3 ($0.06) tools are heavy multi-source aggregations and TF-unique measurements.
+Tier 2 (1 credit, $0.02) tools are single-entity full-window historical lookups. Tier 3 (5 credits, $0.10) tools are heavy multi-source aggregations and TF-unique measurements.
 
 Rationale: per the 70/30 premium-lock framework, strict-premium endpoints carry TF's actual moat. The Tier 1 ($0.02) baseline price made sense during the demand-discovery temp-unlock; now that these endpoints are gated as strict-premium (v1.30.0) and the gate is observable, repricing into Tier 2/3 sets prices closer to the curated-derived-metrics market (Glassnode / Kaito comparables). Per-call USD cost is now legible alongside credit count in every affected tool description.
 
