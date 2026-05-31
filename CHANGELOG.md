@@ -2,6 +2,28 @@
 
 All notable changes to the [TensorFeed.ai MCP server](https://github.com/RipperMercs/tensorfeed-mcp). Free tools work without configuration; premium tools require a bearer token via the `TENSORFEED_TOKEN` env var. Buy credits at [tensorfeed.ai/developers/agent-payments](https://tensorfeed.ai/developers/agent-payments).
 
+## 1.36.3 - 2026-05-31
+
+Adds the Route Verdict wedge: TensorFeed's signed routing decision is now a
+tool you can try free, then upgrade. Brings the catalog to 61 tools (37 free,
+24 premium).
+
+Free tool:
+- `route_verdict_preview`: TensorFeed's signed routing decision that fuses
+  live pricing, contamination-discounted benchmarks, real production usage,
+  measured p95 latency, incident state, and deprecation flags into the single
+  best model for a task or a named model, with the reasoning. No key, 10 calls
+  per day per IP.
+
+Premium tool:
+- `route_verdict` (1 credit): the same decision plus ranked runners-up,
+  constraint filters (max p95 latency, budget, min quality, operational-only,
+  exclude-deprecated), and an AFTA-signed receipt over the exact inputs so you
+  can prove why you routed. Strict premium, no free trial.
+
+The older `premium_routing` (a ranked list with a score breakdown) is
+unchanged and remains available.
+
 ## 1.36.2 - 2026-05-31
 
 Pricing-copy and catalog-accuracy corrections. No change to the free/paid

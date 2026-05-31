@@ -854,6 +854,174 @@ registerTool(
   },
 );
 
+// ── Tool: route_verdict_preview (free, 10/IP/day) ───────────────────
+// Free taste of the signed routing decision. Returns the single best
+// model for a task or named model, with the reasoning, but no ranked
+// runners-up, no constraint filters, and no AFTA-signed receipt. The
+// upgrade is route_verdict (1 credit). No auth, rate-limited 10/IP/day
+// by the worker.
+
+interface VerdictCandidatePayload {
+  rank: number;
+  model: { id: string; name: string; provider: string; openSource: boolean; contextWindow: number };
+  pricing: { input: number; output: number; blended: number; currency: string; unit: string };
+  quality: { task_score: number; trust_discounted: number; contamination_note: string | null };
+  usage: { corroborated: boolean; rank: number | null; share_pct: number | null; trend: string | null };
+  latency: { measured_p95_ms: number | null; source: string };
+  operational: { ok: boolean | null; status: string; source: string };
+  deprecation: { flagged: boolean; status: string | null; sunset_date: string | null };
+  composite_score: number;
+  why: string;
+}
+
+interface VerdictTrust {
+  usage_corroborated: boolean;
+  benchmark_contamination: string;
+  operational_layer: string;
+  latency_layer: string;
+}
+
+registerTool(
+  'route_verdict_preview',
+  "Free. TensorFeed's signed routing decision that fuses live pricing, contamination-discounted benchmarks, real production usage, MEASURED p95 latency, incident state, and deprecation flags into the single best model for a task or a named model, with the reasoning. For ranked runners-up, constraint filters, and an AFTA-signed receipt you can audit, use route_verdict. 10 calls per day per IP.",
+  {
+    task: z.enum(['code', 'reasoning', 'creative', 'general']).optional().describe('Task type to route for (code, reasoning, creative, general). Provide task or model.'),
+    model: z.string().optional().describe('Model id or display name to narrow the verdict to one model (e.g. "Claude Opus 4.7" or "claude-opus-4-7"). Provide task or model.'),
+  },
+  async ({ task, model }) => {
+    if (!task && !model) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: 'Provide a task (code, reasoning, creative, general) or a model id/name to get a routing verdict.',
+          },
+        ],
+      };
+    }
+    const params = new URLSearchParams();
+    if (task) params.set('task', task);
+    if (model) params.set('model', model);
+    const data = (await fetchJSON(`/preview/route-verdict?${params}`)) as {
+      ok: boolean;
+      query: { task: string | null; model: string | null };
+      verdict: VerdictCandidatePayload | null;
+      trust: VerdictTrust;
+      data_freshness: Record<string, string | null>;
+      claim: string;
+      rate_limit?: { limit: number; remaining: number; scope: string };
+    };
+    if (!data.verdict) {
+      return {
+        content: [{ type: 'text' as const, text: `No routing verdict available for that query.\n${data.claim ?? ''}` }],
+      };
+    }
+    const v = data.verdict;
+    const t = data.trust;
+    const fresh = [
+      data.data_freshness.pricing ? `pricing ${data.data_freshness.pricing}` : null,
+      data.data_freshness.probe ? `latency ${data.data_freshness.probe}` : null,
+      data.data_freshness.status ? `status ${data.data_freshness.status}` : null,
+    ]
+      .filter(Boolean)
+      .join(', ');
+    const trustLine = `Trust: usage ${t.usage_corroborated ? 'corroborated' : 'uncorroborated'}, benchmark contamination ${t.benchmark_contamination}, operational ${t.operational_layer}, latency ${t.latency_layer}`;
+    const rl = data.rate_limit ? `\nPreview: ${data.rate_limit.remaining} of ${data.rate_limit.limit} calls left today (${data.rate_limit.scope}).` : '';
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text:
+            `Route Verdict: ${v.model.name} (${v.model.provider})\n` +
+            `Why: ${v.why}\n` +
+            `Blended price: $${v.pricing.blended}/1M tokens (in $${v.pricing.input}, out $${v.pricing.output})\n` +
+            `${trustLine}${fresh ? `\nData freshness: ${fresh}` : ''}\n` +
+            `Upgrade: route_verdict (1 credit) adds ranked runners-up, constraint filters, and an AFTA-signed receipt you can audit.${rl}`,
+        },
+      ],
+    };
+  },
+);
+
+// ── Tool: route_verdict (1 credit) ──────────────────────────────────
+// The signed routing decision. Single best model plus ranked runners-up
+// for a task or named model, with constraint filters and an AFTA-signed
+// receipt over the exact inputs. Strict premium, no free trial. The free
+// route_verdict_preview is the no-auth taste of the same engine.
+
+registerTool(
+  'route_verdict',
+  "Costs 1 credit ($0.02). The signed routing decision: TensorFeed's single best model plus ranked runners-up for your task or a named model, fused from live pricing, contamination-discounted benchmarks, real production usage, MEASURED p95 latency, incident state, and deprecation flags, with an AFTA-signed receipt over the exact inputs so you can prove why you routed. Versus the free route_verdict_preview it adds ranked runners-up, constraint filters (max p95 latency, budget, min quality, operational-only, exclude-deprecated), the signed receipt, and no rate limit. Get credits at tensorfeed.ai/developers/agent-payments. Strict premium, no free trial.",
+  {
+    task: z.enum(['code', 'reasoning', 'creative', 'general']).optional().describe('Task type to route for (code, reasoning, creative, general). Provide task or model.'),
+    model: z.string().optional().describe('Model id or display name to narrow the verdict to one model. Provide task or model.'),
+    max_latency_p95_ms: z.number().optional().describe('Drop candidates whose measured p95 latency exceeds this value (ms).'),
+    budget: z.number().optional().describe('Max blended USD per 1M tokens'),
+    min_quality: z.number().min(0).max(1).optional().describe('Minimum trust-discounted quality score in [0, 1]'),
+    require_operational: z.boolean().optional().describe('Default true. Set false to keep candidates known down or in failover.'),
+    exclude_deprecated: z.boolean().optional().describe('Default true. Set false to keep deprecated or sunsetted models.'),
+  },
+  async ({ task, model, max_latency_p95_ms, budget, min_quality, require_operational, exclude_deprecated }) => {
+    if (!task && !model) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: 'Provide a task (code, reasoning, creative, general) or a model id/name to get a signed routing verdict.',
+          },
+        ],
+      };
+    }
+    const params = new URLSearchParams();
+    if (task) params.set('task', task);
+    if (model) params.set('model', model);
+    if (typeof max_latency_p95_ms === 'number') params.set('max_latency_p95_ms', String(max_latency_p95_ms));
+    if (typeof budget === 'number') params.set('budget', String(budget));
+    if (typeof min_quality === 'number') params.set('min_quality', String(min_quality));
+    if (typeof require_operational === 'boolean') params.set('require_operational', String(require_operational));
+    if (typeof exclude_deprecated === 'boolean') params.set('exclude_deprecated', String(exclude_deprecated));
+    const data = (await fetchJSON(`/premium/route-verdict?${params}`, { auth: true })) as {
+      ok: boolean;
+      query: { task: string | null; model: string | null };
+      verdict: VerdictCandidatePayload | null;
+      runners_up: VerdictCandidatePayload[];
+      trust: VerdictTrust;
+      filters_applied: { max_latency_p95_ms: number | null; require_operational: boolean; exclude_deprecated: boolean };
+      claim: string;
+      billing?: { credits_charged: number; credits_remaining?: number };
+    };
+    if (!data.verdict) {
+      return {
+        content: [{ type: 'text' as const, text: `No routing verdict matched your filters.\n${data.claim ?? ''}` }],
+      };
+    }
+    const v = data.verdict;
+    const t = data.trust;
+    const f = data.filters_applied;
+    const runners = (data.runners_up ?? [])
+      .map((r) => `  #${r.rank} ${r.model.name} (${r.model.provider}) blended $${r.pricing.blended}/1M\n     ${r.why}`)
+      .join('\n');
+    const trustLine = `Trust: usage ${t.usage_corroborated ? 'corroborated' : 'uncorroborated'}, benchmark contamination ${t.benchmark_contamination}, operational ${t.operational_layer}, latency ${t.latency_layer}`;
+    const filterLine = `Filters: max p95 ${f.max_latency_p95_ms ?? 'none'}ms, require_operational ${f.require_operational}, exclude_deprecated ${f.exclude_deprecated}`;
+    const billing = data.billing
+      ? `\n\nCharged ${data.billing.credits_charged} credit. Remaining: ${data.billing.credits_remaining}.`
+      : '';
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text:
+            `Route Verdict: ${v.model.name} (${v.model.provider}) score ${v.composite_score}\n` +
+            `Why: ${v.why}\n` +
+            `Blended price: $${v.pricing.blended}/1M tokens (in $${v.pricing.input}, out $${v.pricing.output})\n\n` +
+            `Runners-up:\n${runners || '  (none)'}\n\n` +
+            `${trustLine}\n${filterLine}\n\nClaim: ${data.claim}${billing}`,
+        },
+      ],
+    };
+  },
+);
+
 // ── Tool: pricing_series_free (free, 7-day cap) ─────────────────────
 
 registerTool(
