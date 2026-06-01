@@ -2,6 +2,12 @@
 
 All notable changes to the [TensorFeed.ai MCP server](https://github.com/RipperMercs/tensorfeed-mcp). Free tools work without configuration; premium tools require a bearer token via the `TENSORFEED_TOKEN` env var. Buy credits at [tensorfeed.ai/developers/agent-payments](https://tensorfeed.ai/developers/agent-payments).
 
+## 1.36.4 - 2026-05-31
+
+Docs-only release. The README now opens with the Route Verdict quickstart: a
+zero-install curl against the free preview plus the `route_verdict_preview` and
+`route_verdict` tools. No tool, pricing, or behavior changes from 1.36.3.
+
 ## 1.36.3 - 2026-05-31
 
 Adds the Route Verdict wedge: TensorFeed's signed routing decision is now a
