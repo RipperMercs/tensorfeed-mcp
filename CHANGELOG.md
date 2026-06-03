@@ -290,46 +290,46 @@ All three are backed by the worker endpoints shipped in the same monorepo commit
 ## 1.11.0 - 2026-04-29
 
 ### Added
-- `probe_latest` tool — last 24 hours of measured LLM endpoint latency and availability per provider (Anthropic, OpenAI, Google, Mistral, Cohere). TensorFeed pings each provider's chat completion endpoint every 15 min and records ttfb / total / status. The data is unique because it is measured, not self-reported. Free, no auth.
-- `probe_series` tool — daily SLA series for one provider with ttfb/total p50/p95/p99 and incident-hour count, 90-day max range. 1 credit per call. Pairs with `premium_routing` for picking a model whose SLA you can verify.
+- `probe_latest` tool: last 24 hours of measured LLM endpoint latency and availability per provider (Anthropic, OpenAI, Google, Mistral, Cohere). TensorFeed pings each provider's chat completion endpoint every 15 min and records ttfb / total / status. The data is unique because it is measured, not self-reported. Free, no auth.
+- `probe_series` tool: daily SLA series for one provider with ttfb/total p50/p95/p99 and incident-hour count, 90-day max range. 1 credit per call. Pairs with `premium_routing` for picking a model whose SLA you can verify.
 
 ## 1.10.0 - 2026-04-29
 
 ### Added
-- `mcp_registry_snapshot` tool — today's summary of the official Model Context Protocol server registry: total servers, by-status breakdown, top namespaces, 1-day deltas (newly added, reactivated, deprecated). Free, no auth.
-- `mcp_registry_series` tool — multi-day time series of MCP registry growth and churn. Range capped at 90 days, default 30 days back. 1 credit per call.
+- `mcp_registry_snapshot` tool: today's summary of the official Model Context Protocol server registry: total servers, by-status breakdown, top namespaces, 1-day deltas (newly added, reactivated, deprecated). Free, no auth.
+- `mcp_registry_series` tool: multi-day time series of MCP registry growth and churn. Range capped at 90 days, default 30 days back. 1 credit per call.
 
 The new tools are backed by a fresh daily cron capture of registry.modelcontextprotocol.io. The registry itself is open data, but a 30/90-day trend requires daily capture started weeks before the question is asked.
 
 ## 1.7.0 - 2026-04-27
 
 ### Added
-- `compare_models` tool — side-by-side comparison of 2-5 AI models with normalized benchmarks (union-of-keys with null for missing scores) and rankings (cheapest blended, most context, per-benchmark leaderboard). 1 credit per call.
+- `compare_models` tool: side-by-side comparison of 2-5 AI models with normalized benchmarks (union-of-keys with null for missing scores) and rankings (cheapest blended, most context, per-benchmark leaderboard). 1 credit per call.
 
 ## 1.6.0 - 2026-04-27
 
 ### Added
-- `provider_deepdive` tool — one provider's full profile in a single call: live status with components, all models with pricing + tier + benchmark scores joined, recent news, agent traffic. 1 credit per call.
+- `provider_deepdive` tool: one provider's full profile in a single call: live status with components, all models with pricing + tier + benchmark scores joined, recent news, agent traffic. 1 credit per call.
 
 ## 1.5.0 - 2026-04-27
 
 ### Added
-- `create_digest_watch` tool — register a scheduled daily/weekly digest watch. Fires HMAC-signed POST to your callback URL with a curated pricing-changes summary regardless of whether anything dramatic happened. 1 credit per registration.
+- `create_digest_watch` tool: register a scheduled daily/weekly digest watch. Fires HMAC-signed POST to your callback URL with a curated pricing-changes summary regardless of whether anything dramatic happened. 1 credit per registration.
 
 ## 1.4.0 - 2026-04-27
 
 ### Added
-- `forecast` tool — conservative linear-regression forecast for a price field or benchmark score with 95% prediction interval and confidence label. 1 credit per call.
+- `forecast` tool: conservative linear-regression forecast for a price field or benchmark score with 95% prediction interval and confidence label. 1 credit per call.
 
 ## 1.3.0 - 2026-04-27
 
 ### Added
-- `cost_projection` tool — project workload cost across 1-10 AI models with four time horizons and cheapest-monthly ranking. 1 credit per call.
+- `cost_projection` tool: project workload cost across 1-10 AI models with four time horizons and cheapest-monthly ranking. 1 credit per call.
 
 ## 1.2.0 - 2026-04-27
 
 ### Added
-- `news_search` tool — full-text search over the AI news corpus with date/provider/category filters and relevance scoring. 1 credit per call.
+- `news_search` tool: full-text search over the AI news corpus with date/provider/category filters and relevance scoring. 1 credit per call.
 
 ## 1.1.0 - 2026-04-27
 
@@ -339,7 +339,7 @@ The new tools are backed by a fresh daily cron capture of registry.modelcontextp
 - `mcp-server/server.json` manifest authored against the official MCP registry schema (`ai.tensorfeed/mcp-server`).
 - README expanded with per-tier tool tables and `env` config examples for Claude Desktop / Code.
 
-## 1.0.0 — 2026-04-26 (initial release)
+## 1.0.0 - 2026-04-26 (initial release)
 
 ### Added
 - 5 free tools: `get_ai_news`, `get_ai_status`, `is_service_down`, `get_model_pricing`, `get_ai_today`. No auth, no install beyond `npx -y @tensorfeed/mcp-server`.
