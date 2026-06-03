@@ -234,7 +234,7 @@ server.registerResource(
 
 registerTool(
   'get_ai_news',
-  'Get the latest AI news articles from TensorFeed.ai. Aggregates from 15+ sources including Anthropic, OpenAI, Google, TechCrunch, The Verge, arXiv, and more.',
+  'Get the latest AI news from TensorFeed.ai as a ranked list with title, source, URL, snippet, and publish time, filterable by category (e.g. "anthropic", "openai", "research", "tools"). Aggregates 15+ sources (Anthropic, OpenAI, Google, TechCrunch, The Verge, arXiv, and more) into one normalized feed, so an agent reads one schema instead of polling each outlet. Free, no auth.',
   {
     category: z.string().optional().describe('Filter by category (e.g. "anthropic", "openai", "research", "tools")'),
     limit: z.number().min(1).max(50).optional().describe('Number of articles to return (default 10, max 50)'),
@@ -260,7 +260,7 @@ registerTool(
 
 registerTool(
   'get_ai_status',
-  'Get real-time operational status of major AI services (Claude, OpenAI, Gemini, Mistral, Cohere, Replicate, Hugging Face).',
+  'Get the real-time operational status of major AI services (Claude, OpenAI, Gemini, Mistral, Cohere, Replicate, Hugging Face), including per-component breakdowns and an operational/degraded/down rollup per provider. One cross-provider status call instead of checking each vendor\'s status page, useful before an agent routes a request to a model that may be impaired. Free, no auth.',
   {},
   async () => {
     const data = await fetchJSON('/status') as {
@@ -284,7 +284,7 @@ registerTool(
 
 registerTool(
   'is_service_down',
-  'Check if a specific AI service is currently down or experiencing issues.',
+  'Check whether one named AI service (e.g. "claude", "openai", "gemini", "mistral", "cohere", "hugging face", "replicate") is currently operational, degraded, or down, with its component-level breakdown. Matches on service or provider name and lists available services if there is no match, so an agent can gate a call on live status before sending traffic. Free, no auth.',
   {
     service: z.string().describe('Service name to check (e.g. "claude", "openai", "gemini", "mistral", "cohere", "hugging face", "replicate")'),
   },
@@ -420,7 +420,7 @@ registerTool(
 
 registerTool(
   'get_model_pricing',
-  'Get AI model pricing comparison across all major providers (Anthropic, OpenAI, Google, Meta, Mistral, Cohere). Prices per 1M tokens.',
+  'Get AI model pricing across major providers (Anthropic, OpenAI, Google, Meta, Mistral, Cohere) in one normalized table: input and output price per 1M tokens, context window, and release date per model. One cross-provider comparison instead of scraping six pricing pages, so an agent can pick the cheapest model that fits its context and budget. Free, no auth.',
   {},
   async () => {
     const data = await fetchJSON('/models') as {
@@ -539,7 +539,7 @@ registerTool(
 
 registerTool(
   'get_ai_today',
-  'Get a summary of what happened in AI today. Returns the top stories from the last 24 hours.',
+  'Get a quick digest of the top AI stories from the latest TensorFeed news feed, each with title, source, and URL. A shorter, headline-only companion to get_ai_news for when an agent just needs a fast read on what is happening in AI right now rather than the full article set. Free, no auth.',
   {
     limit: z.number().min(1).max(20).optional().describe('Number of stories (default 5)'),
   },
@@ -917,7 +917,7 @@ registerTool(
 
 registerTool(
   'premium_routing',
-  'Get a ranked list of recommended AI models for a task with full score breakdown (quality, availability, cost, latency). Costs 1 credit ($0.02).',
+  'Get a ranked list of recommended AI models for a task (code, reasoning, creative, or general), each with a composite score plus the quality, availability, cost, and latency components that produced it, and the per-model input/output pricing. Constrain with budget, min_quality, and top_n so the ranking reflects your actual limits instead of a generic leaderboard. Costs 1 credit ($0.02), billed against your TENSORFEED_TOKEN. For a single signed routing decision with reasoning, see route_verdict.',
   {
     task: z.enum(['code', 'reasoning', 'creative', 'general']).optional().describe('Task type the model needs to be good at (default: general)'),
     budget: z.number().optional().describe('Max blended USD per 1M tokens'),
