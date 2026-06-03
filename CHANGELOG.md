@@ -2,6 +2,30 @@
 
 All notable changes to the [TensorFeed.ai MCP server](https://github.com/RipperMercs/tensorfeed-mcp). Free tools work without configuration; premium tools require a bearer token via the `TENSORFEED_TOKEN` env var. Buy credits at [tensorfeed.ai/developers/agent-payments](https://tensorfeed.ai/developers/agent-payments).
 
+## 1.38.0 - 2026-06-03
+
+Description-only release. Sharpens the six foundational free tools (get_ai_news,
+get_ai_status, is_service_down, get_model_pricing, get_ai_today, premium_routing)
+so each states what it returns, why to call it instead of polling sources
+directly, and its tier. get_ai_today drops an inaccurate 24-hour-window claim
+(it returns the latest stories, not a strict time window). premium_routing now
+points at its signed sibling route_verdict. No tool, pricing, or behavior
+changes from 1.37.0.
+
+## 1.37.0 - 2026-06-02
+
+Adds four free agentic-web tools, bringing the catalog to 65 tools (41 free, 24
+premium):
+- `check_agent_ready`: score how agent-ready any tracked site is, 0 to 100, from
+  its x402 manifest, agent.json, OpenAPI spec, llms.txt, AI-bot crawlability,
+  and ai.txt.
+- `agent_ready_summary`: the cross-domain readiness picture across about 500
+  curated domains, with per-surface adoption shares and a top-10 leaderboard.
+- `check_crawler_access`: whether a site allows or blocks GPTBot, ClaudeBot, and
+  other AI crawlers, plus its llms.txt and ai.txt signals.
+- `crawler_access_summary`: the aggregate AI-crawler access map across the
+  tracked domain set.
+
 ## 1.36.4 - 2026-05-31
 
 Docs-only release. The README now opens with the Route Verdict quickstart: a
