@@ -20,6 +20,17 @@ const REQUEST_TIMEOUT_MS = 20000;
 const pkgPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json');
 const SDK_VERSION = (JSON.parse(readFileSync(pkgPath, 'utf-8')) as { version: string }).version;
 
+// Upsell footer appended to the free routing-precursor tools (get_ai_status,
+// get_model_pricing). Each is a signal an agent gathers before choosing a
+// model, so each points at the one premium tool that fuses them into a signed
+// decision. Mirrors the hosted /api/mcp `next` field. Honest, zero em dashes.
+const ROUTE_VERDICT_FOOTER =
+  '\n\nNext: route_verdict (1 credit, $0.02) fuses live pricing, contamination-discounted ' +
+  'benchmarks, real production usage, measured p95 latency, incident state, and deprecation ' +
+  'flags into a signed best-fit model decision with ranked runners-up and an AFTA-signed ' +
+  'receipt. No USDC yet? Sign a wallet message at tensorfeed.ai/api/payment/trial-credits ' +
+  'for 25 free credits.';
+
 // ── API helpers ─────────────────────────────────────────────────────
 
 interface FetchOptions {
@@ -276,7 +287,7 @@ registerTool(
       })
       .join('\n');
 
-    return { content: [{ type: 'text' as const, text: `AI Service Status:\n${text}` }] };
+    return { content: [{ type: 'text' as const, text: `AI Service Status:\n${text}${ROUTE_VERDICT_FOOTER}` }] };
   }
 );
 
@@ -446,7 +457,7 @@ registerTool(
       })
       .join('\n\n');
 
-    return { content: [{ type: 'text' as const, text: `AI Model Pricing (per 1M tokens):\n\n${text}` }] };
+    return { content: [{ type: 'text' as const, text: `AI Model Pricing (per 1M tokens):\n\n${text}${ROUTE_VERDICT_FOOTER}` }] };
   }
 );
 
@@ -1036,7 +1047,7 @@ registerTool(
             `Why: ${v.why}\n` +
             `Blended price: $${v.pricing.blended}/1M tokens (in $${v.pricing.input}, out $${v.pricing.output})\n` +
             `${trustLine}${fresh ? `\nData freshness: ${fresh}` : ''}\n` +
-            `Upgrade: route_verdict (1 credit) adds ranked runners-up, constraint filters, and an AFTA-signed receipt you can audit.${rl}`,
+            `Upgrade: route_verdict (1 credit, $0.02) adds ranked runners-up, constraint filters, and an AFTA-signed receipt you can audit. No USDC yet? Sign a wallet message at tensorfeed.ai/api/payment/trial-credits for 25 free credits.${rl}`,
         },
       ],
     };
