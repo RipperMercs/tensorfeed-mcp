@@ -316,6 +316,106 @@ registerTool(
   }
 );
 
+// Tool: check_agent_ready
+
+registerTool(
+  'check_agent_ready',
+  'Score how agent-ready a website is, 0 to 100, from its public surfaces: x402 payment manifest, /.well-known/agent.json, an OpenAPI spec, llms.txt, AI-bot crawlability, and ai.txt. Returns the score, the tier (closed, emerging, ready, or advanced), and exactly which surfaces the site exposes. Unlike single-site "is my site agent-ready" scanners, this reads from TensorFeed\'s daily-crawled cross-domain dataset, so the same call works for any tracked domain and the scoring rule is published and identical for every site. Free, no auth.',
+  {
+    domain: z.string().describe('Bare domain to score, e.g. "stripe.com" (no scheme, no path)'),
+  },
+  async ({ domain }) => {
+    const data = await fetchJSON(`/agent-ready/site?domain=${encodeURIComponent(domain)}`) as {
+      domain: string; found: boolean; captured_at: string | null;
+      readiness: { score: number; tier: string; surfaces: Record<string, boolean> } | null;
+    };
+    if (!data.found || !data.readiness) {
+      return { content: [{ type: 'text' as const, text: `${data.domain} is not in TensorFeed's tracked set yet (no agent-readiness score). About 500 curated domains are tracked.` }] };
+    }
+    const r = data.readiness;
+    const present = Object.entries(r.surfaces).filter(([, v]) => v).map(([k]) => k);
+    const text =
+      `${data.domain}: agent-readiness ${r.score}/100 (${r.tier})\n` +
+      `Surfaces present: ${present.length ? present.join(', ') : 'none'}\n` +
+      `x402=${r.surfaces.x402} agent.json=${r.surfaces.agentJson} openapi=${r.surfaces.openapi} llms.txt=${r.surfaces.llmsTxt} crawlable=${r.surfaces.crawlable} ai.txt=${r.surfaces.aiTxt}\n` +
+      `Last checked: ${data.captured_at ?? 'n/a'}`;
+    return { content: [{ type: 'text' as const, text }] };
+  }
+);
+
+// Tool: agent_ready_summary
+
+registerTool(
+  'agent_ready_summary',
+  'Get the state of the agentic web. Across about 500 curated domains, returns the share exposing each agent surface (x402, agent.json, OpenAPI, llms.txt, crawlable, ai.txt), the readiness-tier distribution, and a top-10 leaderboard of the most agent-ready sites. This aggregate, cross-domain view is exactly what a single-site scanner cannot give you. Free, no auth.',
+  {},
+  async () => {
+    const d = await fetchJSON('/agent-ready/summary.json') as {
+      profiled: number; domains_tracked: number; captured_at: string | null;
+      adoption_pct: Record<string, number>; tier_distribution: Record<string, number>;
+      leaderboard: { domain: string; sector: string; score: number; tier: string }[];
+    };
+    const a = d.adoption_pct;
+    const lb = (d.leaderboard || []).slice(0, 10).map((e, i) => `${i + 1}. ${e.domain} (${e.score}, ${e.tier})`).join('\n');
+    const text =
+      `Agentic web readiness, ${d.profiled}/${d.domains_tracked} domains profiled (captured ${d.captured_at ?? 'n/a'}):\n` +
+      `Surface adoption: x402 ${a.x402}%, agent.json ${a.agentJson}%, openapi ${a.openapi}%, llms.txt ${a.llmsTxt}%, crawlable ${a.crawlable}%, ai.txt ${a.aiTxt}%\n` +
+      `Tiers: ${Object.entries(d.tier_distribution || {}).map(([t, n]) => `${t} ${n}`).join(', ')}\n` +
+      `Most agent-ready:\n${lb}`;
+    return { content: [{ type: 'text' as const, text }] };
+  }
+);
+
+// Tool: check_crawler_access
+
+registerTool(
+  'check_crawler_access',
+  'Check which AI bots a website allows or blocks in its robots.txt: GPTBot, ClaudeBot, PerplexityBot, CCBot, Google-Extended, Bytespider, and more, with a per-bot verdict (allowed, blocked, partial, or unknown), plus whether the site publishes llms.txt and ai.txt. Reports the site\'s stated policy, not enforcement (robots.txt compliance is voluntary). Free, no auth.',
+  {
+    domain: z.string().describe('Bare domain to check, e.g. "nytimes.com" (no scheme, no path)'),
+  },
+  async ({ domain }) => {
+    const data = await fetchJSON(`/ai-crawler-access/site?domain=${encodeURIComponent(domain)}`) as {
+      domain: string; found: boolean; captured_at: string | null;
+      record: { robotsStatus: number | null; bots: Record<string, string>; hasLlmsTxt: boolean; hasAiTxt: boolean } | null;
+    };
+    if (!data.found || !data.record) {
+      return { content: [{ type: 'text' as const, text: `${data.domain} is not in TensorFeed's tracked set yet. About 500 curated domains are tracked for AI-crawler access.` }] };
+    }
+    const rec = data.record;
+    const bots = Object.entries(rec.bots).map(([b, v]) => `  ${b}: ${v}`).join('\n');
+    const text =
+      `${data.domain} (robots.txt HTTP ${rec.robotsStatus ?? 'n/a'}) AI-bot access:\n${bots}\n` +
+      `llms.txt: ${rec.hasLlmsTxt ? 'yes' : 'no'}, ai.txt: ${rec.hasAiTxt ? 'yes' : 'no'}\n` +
+      `Stated policy only; compliance is voluntary. Last checked: ${data.captured_at ?? 'n/a'}`;
+    return { content: [{ type: 'text' as const, text }] };
+  }
+);
+
+// Tool: crawler_access_summary
+
+registerTool(
+  'crawler_access_summary',
+  'Get the aggregate AI-crawler access map across about 500 curated domains: the percentage of sites that block each AI bot (the publisher-versus-AI-crawler picture), plus llms.txt and ai.txt adoption rates. Unlike a single-site robots.txt checker, this is the cross-domain trend view of who is shutting AI crawlers out. Free, no auth.',
+  {},
+  async () => {
+    const d = await fetchJSON('/ai-crawler-access/summary.json') as {
+      domains_tracked: number; domains_with_data: number; captured_at: string | null;
+      bot_blocked_pct: Record<string, number>; llms_txt_adoption_pct: number; ai_txt_adoption_pct: number;
+    };
+    const blocked = Object.entries(d.bot_blocked_pct || {})
+      .sort((x, y) => y[1] - x[1])
+      .slice(0, 8)
+      .map(([b, p]) => `  ${b}: ${p}% blocked`)
+      .join('\n');
+    const text =
+      `AI-crawler access across ${d.domains_with_data}/${d.domains_tracked} tracked domains (captured ${d.captured_at ?? 'n/a'}):\n` +
+      `Most-blocked AI bots:\n${blocked}\n` +
+      `llms.txt adoption: ${d.llms_txt_adoption_pct}%, ai.txt adoption: ${d.ai_txt_adoption_pct}%`;
+    return { content: [{ type: 'text' as const, text }] };
+  }
+);
+
 // ── Tool: get_model_pricing ─────────────────────────────────────────
 
 registerTool(
