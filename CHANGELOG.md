@@ -2,6 +2,43 @@
 
 All notable changes to the [TensorFeed.ai MCP server](https://github.com/RipperMercs/tensorfeed-mcp). Free tools work without configuration; premium tools require a bearer token via the `TENSORFEED_TOKEN` env var. Buy credits at [tensorfeed.ai/developers/agent-payments](https://tensorfeed.ai/developers/agent-payments).
 
+## 1.39.0 - 2026-06-04
+
+Surfaces TensorFeed's full signed-verdict family in the stdio server. Adds the
+seven verdicts below, each shipping as a free preview tool plus a 1-credit
+($0.02) signed premium tool with an AFTA-signed receipt. This brings the catalog
+to 79 tools (48 free, 31 premium):
+- `provider_reliability_verdict_preview` / `provider_reliability_verdict`:
+  the signed dependability ruling over TensorFeed's own latency and availability
+  probes, scoring availability and tail consistency to name the safest provider
+  to build on.
+- `x402_settlement_verdict_preview` / `x402_settlement_verdict`: the settlement
+  momentum, concentration, and leading-publisher read over the on-chain x402
+  index for a 24h, 7d, or 30d window.
+- `x402_publisher_verdict_preview` / `x402_publisher_verdict`: the signed trust
+  verdict on one publisher domain (actively settling, recently quiet, registered
+  with no settlement, unreachable, no Base payTo, or not indexed) before you
+  pay it.
+- `stack_safety_verdict_preview` / `stack_safety_verdict`: the GO, HOLD, or
+  BLOCK deploy gate over a list of package@version pins, with the matched-CVE
+  and KEV evidence for the worst offender.
+- `benchmark_trust_verdict_preview` / `benchmark_trust_verdict`: the trust band
+  and 0 to 100 score for a benchmark or category, flagging saturation,
+  contamination, and held-out status.
+- `failover_verdict_preview` / `failover_verdict`: when a provider is degraded,
+  the signed ruling on the single best operational provider to fail over to,
+  with ranked alternatives.
+- `ssvc_verdict_preview` / `ssvc_verdict`: the CISA SSVC Act, Attend, Track, or
+  Track* decision for one CVE, with the decision points and a live KEV
+  cross-check.
+
+Adds contextual pointers so an agent discovers the matching verdict from a tool
+it already uses: `is_service_down` points to `failover_verdict`,
+`get_ai_cves_latest` points to `ssvc_verdict` and `stack_safety_verdict`,
+`get_x402_publishers` points to `x402_publisher_verdict`, and
+`status_leaderboard_free` points to `provider_reliability_verdict`. No behavior
+change to those four tools.
+
 ## 1.38.0 - 2026-06-03
 
 Description-only release. Sharpens the six foundational free tools (get_ai_news,
