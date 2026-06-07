@@ -2,6 +2,67 @@
 
 All notable changes to the [TensorFeed.ai MCP server](https://github.com/RipperMercs/tensorfeed-mcp). Free tools work without configuration; premium tools require a bearer token via the `TENSORFEED_TOKEN` env var. Buy credits at [tensorfeed.ai/developers/agent-payments](https://tensorfeed.ai/developers/agent-payments).
 
+## 2.0.0 - 2026-06-07
+
+Major tool-surface rework. BREAKING: the catalog drops from about 78 tools to
+exactly 24. The old surface had grown wide enough that agents picked the wrong
+tool or stalled across near-duplicate names; 24 sharp tools make tool-selection
+reliable. No HTTP endpoint was removed. Everything still works at
+tensorfeed.ai; this release only changes which slices are first-class MCP tools.
+
+### Migration
+
+If your code called any of the names below, switch to the replacement:
+
+- The eight signed verdicts collapse from preview plus paid pairs into one tool
+  each with a `tier` parameter. `<family>_verdict_preview` and
+  `<family>_verdict` are now a single `<family>_verdict`, where `tier` is
+  `preview` (free, the default) or `full` (1 credit, AFTA-signed). Affected
+  families: route, provider_reliability, x402_settlement, x402_publisher,
+  stack_safety, benchmark_trust, failover, ssvc.
+- The four time series collapse from free plus paid pairs into one tool each
+  with a `days` parameter. `pricing_series_free` and `pricing_series` are now a
+  single `pricing_series`; the same applies to `benchmark_series`,
+  `status_uptime`, and `status_leaderboard`. Pass `days` 1 to 7 for the free
+  window or 8 to 90 for the paid window.
+- The four watch creators merge into one `create_watch` with a `type`
+  parameter. `create_price_watch`, `create_status_watch`, `create_digest_watch`,
+  and `create_leaderboard_rank_watch` are now `create_watch` with `type` set to
+  `price`, `status`, `digest`, or `leaderboard_rank`.
+- `get_ai_today` folds into `get_ai_news`. Pass `digest: true` for the daily
+  brief that `get_ai_today` used to return.
+- `get_account_balance` and `get_account_usage` merge into one `account_status`
+  that returns both the balance and the usage view.
+
+### Removed from the tool list (still live as HTTP endpoints)
+
+About 40 long-tail standalone tools were dropped from the MCP surface, including
+the model-deprecation, agent-activity, IOC, AFTA-certification,
+agent-reputation, agent-readiness, crawler-access, MCP-registry-snapshot,
+probe, paper and trending feeds, Reddit, OpenRouter, ecosystem-today,
+earthquake, weather-alert, agent-opportunity, AI-CVE, company-filings, x402
+market, and the standalone routing, news-search, cost-projection, and
+agents-directory tools. None of these went away on the server. Each one is
+still callable as an HTTP endpoint on tensorfeed.ai, and the new
+`find_tensorfeed_data` tool helps an agent discover the right one on demand.
+
+### Added
+
+- `find_tensorfeed_data`: a discovery tool. Describe the AI-ecosystem data you
+  want and it returns the matching TensorFeed endpoints, with the path and
+  parameters to call, so an agent can reach the full catalog without a dedicated
+  tool for every feed.
+
+### The 24 tools
+
+`get_ai_news`, `get_ai_status`, `is_service_down`, `get_model_pricing`,
+`route_verdict`, `provider_reliability_verdict`, `x402_settlement_verdict`,
+`x402_publisher_verdict`, `stack_safety_verdict`, `benchmark_trust_verdict`,
+`failover_verdict`, `ssvc_verdict`, `whats_new`, `compare_models`,
+`provider_deepdive`, `pricing_series`, `benchmark_series`, `status_uptime`,
+`status_leaderboard`, `account_status`, `list_watches`, `create_watch`,
+`delete_watch`, `find_tensorfeed_data`.
+
 ## 1.39.0 - 2026-06-04
 
 Surfaces TensorFeed's full signed-verdict family in the stdio server. Adds the

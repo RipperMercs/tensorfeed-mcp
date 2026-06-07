@@ -25,7 +25,7 @@ const SDK_VERSION = (JSON.parse(readFileSync(pkgPath, 'utf-8')) as { version: st
 // model, so each points at the one premium tool that fuses them into a signed
 // decision. Mirrors the hosted /api/mcp `next` field. Honest, zero em dashes.
 const ROUTE_VERDICT_FOOTER =
-  '\n\nNext: route_verdict (1 credit, $0.02) fuses live pricing, contamination-discounted ' +
+  '\n\nNext: route_verdict with tier="full" (1 credit, $0.02) fuses live pricing, contamination-discounted ' +
   'benchmarks, real production usage, measured p95 latency, incident state, and deprecation ' +
   'flags into a signed best-fit model decision with ranked runners-up and an AFTA-signed ' +
   'receipt. No USDC yet? Sign a wallet message at tensorfeed.ai/api/payment/trial-credits ' +
@@ -249,8 +249,28 @@ registerTool(
   {
     category: z.string().optional().describe('Filter by category (e.g. "anthropic", "openai", "research", "tools")'),
     limit: z.number().min(1).max(50).optional().describe('Number of articles to return (default 10, max 50)'),
+    digest: z.boolean().optional().describe('When true, return a headline-only digest (title, source, URL per story) instead of the full article set.'),
   },
-  async ({ category, limit }) => {
+  async ({ category, limit, digest }) => {
+    // digest mode is a headline-only companion view of the same feed. It honors
+    // the same inputs as the full view: the category filter and the schema limit
+    // (default 5, max 50). Earlier this branch dropped category and capped at 20,
+    // silently ignoring declared params.
+    if (digest) {
+      const dParams = new URLSearchParams();
+      if (category) dParams.set('category', category);
+      dParams.set('limit', String(limit || 5));
+      const data = await fetchJSON(`/news?${dParams}`) as {
+        articles: { title: string; url: string; source: string; publishedAt: string }[];
+      };
+
+      const text = data.articles
+        .map((a, i) => `${i + 1}. ${a.title} (${a.source})\n   ${a.url}`)
+        .join('\n\n');
+
+      return { content: [{ type: 'text' as const, text: `Today in AI:\n\n${text}` }] };
+    }
+
     const params = new URLSearchParams();
     if (category) params.set('category', category);
     params.set('limit', String(limit || 10));
@@ -265,6 +285,35 @@ registerTool(
 
     return { content: [{ type: 'text' as const, text: text || 'No articles found.' }] };
   }
+);
+
+// ── Tool: find_tensorfeed_data (discovery, long-tail surface) ───────
+
+registerTool(
+  'find_tensorfeed_data',
+  'Discover which TensorFeed endpoint answers a data need. Describe what you want in plain language (e.g. "trending AI papers", "is OpenAI down", "model price history") and this returns the 2 to 3 best-matching TensorFeed endpoints, each with its HTTP path, what it returns, and whether it is free or paid. TensorFeed exposes 100+ AI-ecosystem data and signed-verdict endpoints; the core ones are also dedicated tools, but the full catalog is reachable here and callable over HTTP (paid ones via x402 or a credits token). Free, no auth. Use this first when no dedicated tool obviously fits.',
+  {
+    query: z.string().describe('Plain-language description of the data or decision you need.'),
+    limit: z.number().int().min(1).max(5).optional().describe('Max endpoints to return (default 3).'),
+  },
+  async ({ query, limit }) => {
+    const { flattenCatalog, scoreEndpoints } = await import('./discovery.js');
+    let meta: unknown;
+    try {
+      meta = await fetchJSON('/meta');
+    } catch {
+      const { readFileSync } = await import('node:fs');
+      const p = join(dirname(fileURLToPath(import.meta.url)), 'meta-snapshot.json');
+      meta = JSON.parse(readFileSync(p, 'utf-8'));
+    }
+    const rows = flattenCatalog(meta);
+    const top = scoreEndpoints(rows, query, limit ?? 3);
+    if (top.length === 0) {
+      return { content: [{ type: 'text' as const, text: `No TensorFeed endpoint matched "${query}". Browse the full catalog at https://tensorfeed.ai/api/meta or https://tensorfeed.ai/developers.` }] };
+    }
+    const lines = top.map((r) => `- ${r.path}\n  ${r.description}`).join('\n');
+    return { content: [{ type: 'text' as const, text: `Top TensorFeed endpoints for "${query}":\n${lines}\n\nCall free endpoints directly over HTTP. Paid endpoints (marked with a credit cost) accept x402 payment or a TENSORFEED_TOKEN bearer; see https://tensorfeed.ai/developers/agent-payments.` }] };
+  },
 );
 
 // ── Tool: get_ai_status ─────────────────────────────────────────────
@@ -327,106 +376,6 @@ registerTool(
   }
 );
 
-// Tool: check_agent_ready
-
-registerTool(
-  'check_agent_ready',
-  'Score how agent-ready a website is, 0 to 100, from its public surfaces: x402 payment manifest, /.well-known/agent.json, an OpenAPI spec, llms.txt, AI-bot crawlability, and ai.txt. Returns the score, the tier (closed, emerging, ready, or advanced), and exactly which surfaces the site exposes. Unlike single-site "is my site agent-ready" scanners, this reads from TensorFeed\'s daily-crawled cross-domain dataset, so the same call works for any tracked domain and the scoring rule is published and identical for every site. Free, no auth.',
-  {
-    domain: z.string().describe('Bare domain to score, e.g. "stripe.com" (no scheme, no path)'),
-  },
-  async ({ domain }) => {
-    const data = await fetchJSON(`/agent-ready/site?domain=${encodeURIComponent(domain)}`) as {
-      domain: string; found: boolean; captured_at: string | null;
-      readiness: { score: number; tier: string; surfaces: Record<string, boolean> } | null;
-    };
-    if (!data.found || !data.readiness) {
-      return { content: [{ type: 'text' as const, text: `${data.domain} is not in TensorFeed's tracked set yet (no agent-readiness score). About 500 curated domains are tracked.` }] };
-    }
-    const r = data.readiness;
-    const present = Object.entries(r.surfaces).filter(([, v]) => v).map(([k]) => k);
-    const text =
-      `${data.domain}: agent-readiness ${r.score}/100 (${r.tier})\n` +
-      `Surfaces present: ${present.length ? present.join(', ') : 'none'}\n` +
-      `x402=${r.surfaces.x402} agent.json=${r.surfaces.agentJson} openapi=${r.surfaces.openapi} llms.txt=${r.surfaces.llmsTxt} crawlable=${r.surfaces.crawlable} ai.txt=${r.surfaces.aiTxt}\n` +
-      `Last checked: ${data.captured_at ?? 'n/a'}`;
-    return { content: [{ type: 'text' as const, text }] };
-  }
-);
-
-// Tool: agent_ready_summary
-
-registerTool(
-  'agent_ready_summary',
-  'Get the state of the agentic web. Across about 500 curated domains, returns the share exposing each agent surface (x402, agent.json, OpenAPI, llms.txt, crawlable, ai.txt), the readiness-tier distribution, and a top-10 leaderboard of the most agent-ready sites. This aggregate, cross-domain view is exactly what a single-site scanner cannot give you. Free, no auth.',
-  {},
-  async () => {
-    const d = await fetchJSON('/agent-ready/summary.json') as {
-      profiled: number; domains_tracked: number; captured_at: string | null;
-      adoption_pct: Record<string, number>; tier_distribution: Record<string, number>;
-      leaderboard: { domain: string; sector: string; score: number; tier: string }[];
-    };
-    const a = d.adoption_pct;
-    const lb = (d.leaderboard || []).slice(0, 10).map((e, i) => `${i + 1}. ${e.domain} (${e.score}, ${e.tier})`).join('\n');
-    const text =
-      `Agentic web readiness, ${d.profiled}/${d.domains_tracked} domains profiled (captured ${d.captured_at ?? 'n/a'}):\n` +
-      `Surface adoption: x402 ${a.x402}%, agent.json ${a.agentJson}%, openapi ${a.openapi}%, llms.txt ${a.llmsTxt}%, crawlable ${a.crawlable}%, ai.txt ${a.aiTxt}%\n` +
-      `Tiers: ${Object.entries(d.tier_distribution || {}).map(([t, n]) => `${t} ${n}`).join(', ')}\n` +
-      `Most agent-ready:\n${lb}`;
-    return { content: [{ type: 'text' as const, text }] };
-  }
-);
-
-// Tool: check_crawler_access
-
-registerTool(
-  'check_crawler_access',
-  'Check which AI bots a website allows or blocks in its robots.txt: GPTBot, ClaudeBot, PerplexityBot, CCBot, Google-Extended, Bytespider, and more, with a per-bot verdict (allowed, blocked, partial, or unknown), plus whether the site publishes llms.txt and ai.txt. Reports the site\'s stated policy, not enforcement (robots.txt compliance is voluntary). Free, no auth.',
-  {
-    domain: z.string().describe('Bare domain to check, e.g. "nytimes.com" (no scheme, no path)'),
-  },
-  async ({ domain }) => {
-    const data = await fetchJSON(`/ai-crawler-access/site?domain=${encodeURIComponent(domain)}`) as {
-      domain: string; found: boolean; captured_at: string | null;
-      record: { robotsStatus: number | null; bots: Record<string, string>; hasLlmsTxt: boolean; hasAiTxt: boolean } | null;
-    };
-    if (!data.found || !data.record) {
-      return { content: [{ type: 'text' as const, text: `${data.domain} is not in TensorFeed's tracked set yet. About 500 curated domains are tracked for AI-crawler access.` }] };
-    }
-    const rec = data.record;
-    const bots = Object.entries(rec.bots).map(([b, v]) => `  ${b}: ${v}`).join('\n');
-    const text =
-      `${data.domain} (robots.txt HTTP ${rec.robotsStatus ?? 'n/a'}) AI-bot access:\n${bots}\n` +
-      `llms.txt: ${rec.hasLlmsTxt ? 'yes' : 'no'}, ai.txt: ${rec.hasAiTxt ? 'yes' : 'no'}\n` +
-      `Stated policy only; compliance is voluntary. Last checked: ${data.captured_at ?? 'n/a'}`;
-    return { content: [{ type: 'text' as const, text }] };
-  }
-);
-
-// Tool: crawler_access_summary
-
-registerTool(
-  'crawler_access_summary',
-  'Get the aggregate AI-crawler access map across about 500 curated domains: the percentage of sites that block each AI bot (the publisher-versus-AI-crawler picture), plus llms.txt and ai.txt adoption rates. Unlike a single-site robots.txt checker, this is the cross-domain trend view of who is shutting AI crawlers out. Free, no auth.',
-  {},
-  async () => {
-    const d = await fetchJSON('/ai-crawler-access/summary.json') as {
-      domains_tracked: number; domains_with_data: number; captured_at: string | null;
-      bot_blocked_pct: Record<string, number>; llms_txt_adoption_pct: number; ai_txt_adoption_pct: number;
-    };
-    const blocked = Object.entries(d.bot_blocked_pct || {})
-      .sort((x, y) => y[1] - x[1])
-      .slice(0, 8)
-      .map(([b, p]) => `  ${b}: ${p}% blocked`)
-      .join('\n');
-    const text =
-      `AI-crawler access across ${d.domains_with_data}/${d.domains_tracked} tracked domains (captured ${d.captured_at ?? 'n/a'}):\n` +
-      `Most-blocked AI bots:\n${blocked}\n` +
-      `llms.txt adoption: ${d.llms_txt_adoption_pct}%, ai.txt adoption: ${d.ai_txt_adoption_pct}%`;
-    return { content: [{ type: 'text' as const, text }] };
-  }
-);
-
 // ── Tool: get_model_pricing ─────────────────────────────────────────
 
 registerTool(
@@ -461,516 +410,58 @@ registerTool(
   }
 );
 
-// ── Tool: get_model_deprecations ────────────────────────────────────
-
-registerTool(
-  'get_model_deprecations',
-  "Get the AI model deprecation calendar. Provider-by-provider registry of model retirements and deprecation announcements (OpenAI, Anthropic, Google, Cohere, and others). Each entry carries the announced/deprecation/sunset dates, the recommended replacement model, and a source URL pointing at the provider's own announcement. Useful for agents who need to know when a model they depend on will stop accepting traffic and what to migrate to.",
-  {
-    provider: z
-      .string()
-      .optional()
-      .describe('Filter to a single provider (e.g. "OpenAI", "Anthropic", "Google", "Cohere"). Case-insensitive.'),
-    status: z
-      .enum(['announced', 'deprecated', 'sunsetted'])
-      .optional()
-      .describe('Filter by lifecycle stage. announced = deprecation announced but model still serves at full capacity; deprecated = past deprecation date, migration required; sunsetted = no longer accepts traffic.'),
-  },
-  async ({ provider, status }) => {
-    const params = new URLSearchParams();
-    if (provider) params.set('provider', provider);
-    if (status) params.set('status', status);
-    const qs = params.toString();
-    const data = await fetchJSON(`/model-deprecations${qs ? `?${qs}` : ''}`) as {
-      lastUpdated?: string;
-      count?: number;
-      deprecations?: {
-        provider: string;
-        model: string;
-        modelDisplay?: string;
-        status: 'announced' | 'deprecated' | 'sunsetted';
-        announcedDate?: string;
-        deprecationDate?: string;
-        sunsetDate?: string;
-        replacement?: string;
-        notes?: string;
-        sourceUrl: string;
-      }[];
-    };
-
-    const entries = data.deprecations ?? [];
-    if (entries.length === 0) {
-      return {
-        content: [
-          {
-            type: 'text' as const,
-            text:
-              'No model deprecations matched the filter. The full calendar is at https://tensorfeed.ai/model-deprecations.',
-          },
-        ],
-      };
-    }
-
-    // Group by provider for readable output.
-    const byProvider = new Map<string, typeof entries>();
-    for (const d of entries) {
-      const list = byProvider.get(d.provider) ?? [];
-      list.push(d);
-      byProvider.set(d.provider, list);
-    }
-
-    const sections = Array.from(byProvider.entries())
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([prov, list]) => {
-        const rows = list
-          .map(d => {
-            const dates = [
-              d.announcedDate ? `announced ${d.announcedDate}` : null,
-              d.deprecationDate ? `deprecated ${d.deprecationDate}` : null,
-              d.sunsetDate ? `sunset ${d.sunsetDate}` : null,
-            ]
-              .filter(Boolean)
-              .join(', ');
-            const display = d.modelDisplay ? ` (${d.modelDisplay})` : '';
-            const repl = d.replacement ? `\n     replacement: ${d.replacement}` : '';
-            const note = d.notes ? `\n     note: ${d.notes}` : '';
-            return `  ${d.model}${display} [${d.status.toUpperCase()}]\n     ${dates}${repl}${note}\n     source: ${d.sourceUrl}`;
-          })
-          .join('\n');
-        return `${prov}:\n${rows}`;
-      })
-      .join('\n\n');
-
-    const header = `AI Model Deprecation Calendar (${entries.length} ${entries.length === 1 ? 'entry' : 'entries'}, last updated ${data.lastUpdated ?? 'recently'}):\n\n`;
-    return { content: [{ type: 'text' as const, text: header + sections }] };
-  }
-);
-
-// ── Tool: get_ai_today ──────────────────────────────────────────────
-
-registerTool(
-  'get_ai_today',
-  'Get a quick digest of the top AI stories from the latest TensorFeed news feed, each with title, source, and URL. A shorter, headline-only companion to get_ai_news for when an agent just needs a fast read on what is happening in AI right now rather than the full article set. Free, no auth.',
-  {
-    limit: z.number().min(1).max(20).optional().describe('Number of stories (default 5)'),
-  },
-  async ({ limit }) => {
-    const data = await fetchJSON(`/news?limit=${limit || 5}`) as {
-      articles: { title: string; url: string; source: string; publishedAt: string }[];
-    };
-
-    const text = data.articles
-      .map((a, i) => `${i + 1}. ${a.title} (${a.source})\n   ${a.url}`)
-      .join('\n\n');
-
-    return { content: [{ type: 'text' as const, text: `Today in AI:\n\n${text}` }] };
-  }
-);
-
-// ── Tool: get_agent_activity ────────────────────────────────────────
-
-registerTool(
-  'get_agent_activity',
-  'Get live AI bot traffic on TensorFeed.ai. Returns today\'s bot hit count, the most recent 50 hits with bot name + endpoint + timestamp, and a derived top-bots breakdown. Useful when an agent wants to see which crawlers are pulling AI ecosystem data and how that distribution shifts. Free, no auth.',
-  {},
-  async () => {
-    const data = (await fetchJSON('/agents/activity')) as {
-      today_count: number;
-      last_updated: string;
-      recent: { bot: string; endpoint: string; timestamp: string }[];
-    };
-
-    const tally = new Map<string, number>();
-    for (const hit of data.recent) {
-      tally.set(hit.bot, (tally.get(hit.bot) || 0) + 1);
-    }
-    const breakdown = Array.from(tally.entries())
-      .map(([bot, count]) => `  ${bot}: ${count}`)
-      .sort()
-      .join('\n');
-
-    const tail = data.recent
-      .slice(0, 10)
-      .map(h => `  ${h.bot}  ${h.endpoint}  (${h.timestamp})`)
-      .join('\n');
-
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text:
-            `AI bot traffic on TensorFeed.ai\n\n` +
-            `Today's bot hits: ${data.today_count}\n` +
-            `Last updated: ${data.last_updated}\n\n` +
-            `Bot breakdown (recent ${data.recent.length} hits):\n${breakdown || '  (none)'}\n\n` +
-            `Recent tail (10 most recent):\n${tail || '  (none)'}\n\n` +
-            `Public dashboard: https://tensorfeed.ai/agent-traffic`,
-        },
-      ],
-    };
-  },
-);
-
-// ── Tool: get_ai_supply_chain_iocs ──────────────────────────────────
-
-registerTool(
-  'get_ai_supply_chain_iocs',
-  'Get the latest AI/ML supply-chain indicators-of-compromise from the TensorFeed defender feed. Daily-refreshed list of GitHub Security Advisory entries filtered by AI/ML/LLM/MCP keyword vocabulary across npm, PyPI, Go, Maven, and other ecosystems. Each entry includes the package name, ecosystem, GHSA advisory ID, severity, summary, vulnerable version range, publication date, and a link to the authoritative GHSA record. Pure data feed: TensorFeed re-publishes already-public advisories, does not detect malware, and does not attribute it. Always treat the linked GHSA record as authoritative. Useful for AI-tool maintainers, MCP-server reviewers, and supply-chain monitors that want a single feed of AI-relevant advisories rather than parsing all of GHSA.',
-  {
-    severity: z
-      .enum(['critical', 'high', 'moderate', 'low'])
-      .optional()
-      .describe('Filter to a single GHSA severity tier'),
-    ecosystem: z
-      .string()
-      .optional()
-      .describe('Filter to a single package ecosystem (e.g. "npm", "pypi", "go", "maven")'),
-    limit: z
-      .number()
-      .min(1)
-      .max(100)
-      .optional()
-      .describe('Maximum number of advisories to return (default 25, max 100)'),
-  },
-  async ({ severity, ecosystem, limit }) => {
-    const data = (await fetchJSON('/security/ai-supply-chain-iocs.json')) as {
-      generated_at: string;
-      total: number;
-      posture: string;
-      sources: { name: string; url: string; license: string }[];
-      entries: {
-        package: { name: string; ecosystem: string };
-        advisory_id: string;
-        severity: string;
-        summary: string;
-        published_at: string;
-        url: string;
-        vulnerable_version_range: string;
-        ai_relevance?: { matched_keywords?: string[] };
-        primary_source: string;
-      }[];
-    };
-
-    const sevWanted = severity?.toLowerCase();
-    const ecoWanted = ecosystem?.toLowerCase();
-    const filtered = data.entries.filter((e) => {
-      if (sevWanted && e.severity.toLowerCase() !== sevWanted) return false;
-      if (ecoWanted && e.package.ecosystem.toLowerCase() !== ecoWanted) return false;
-      return true;
-    });
-    const cap = Math.min(limit ?? 25, 100);
-    const rows = filtered.slice(0, cap);
-
-    if (rows.length === 0) {
-      return {
-        content: [
-          {
-            type: 'text' as const,
-            text: `No AI supply-chain IOCs matched (total in feed: ${data.total}, generated ${data.generated_at}).`,
-          },
-        ],
-      };
-    }
-
-    const body = rows
-      .map((e, i) => {
-        const kw = e.ai_relevance?.matched_keywords?.length
-          ? ` [matched: ${e.ai_relevance.matched_keywords.join(', ')}]`
-          : '';
-        return [
-          `${i + 1}. ${e.package.ecosystem}: ${e.package.name} (${e.severity.toUpperCase()})`,
-          `   ${e.summary}`,
-          `   GHSA: ${e.advisory_id}  ${e.url}`,
-          `   Affected: ${e.vulnerable_version_range}  Published: ${e.published_at}${kw}`,
-        ].join('\n');
-      })
-      .join('\n\n');
-
-    const header = `AI supply-chain IOCs (${rows.length} of ${filtered.length} matched, ${data.total} in feed, generated ${data.generated_at}):`;
-    const footer = `\n\nPosture: ${data.posture}`;
-
-    return { content: [{ type: 'text' as const, text: `${header}\n\n${body}${footer}` }] };
-  },
-);
-
-// ── Tool: get_honeypot_iocs ─────────────────────────────────────────
-
-registerTool(
-  'get_honeypot_iocs',
-  'Get the TensorFeed honeypot indicators-of-compromise feed. Returns attacker IP addresses, user agents, and target paths observed against TensorFeed.ai trap endpoints over the last 30 days. Pure first-party observation; not a re-export of upstream threat intel. License CC0; downstream defenders may ingest and pre-block at their edge. Each row: ioc value, ioc type (ip / ua / path), first_seen, last_seen, hit_count. Useful as a low-noise honeypot signal layered on top of public IOC feeds.',
-  {
-    type: z
-      .enum(['ip', 'ua', 'path'])
-      .optional()
-      .describe('Filter to one IOC type. Omit to return all types.'),
-    limit: z
-      .number()
-      .min(1)
-      .max(500)
-      .optional()
-      .describe('Maximum number of IOCs to return (default 50, max 500)'),
-  },
-  async ({ type, limit }) => {
-    const data = (await fetchJSON('/security/iocs.json')) as {
-      version: string;
-      generated_at: string;
-      source: string;
-      window_hours: number;
-      total_iocs: number;
-      iocs: {
-        ioc: string;
-        type: string;
-        first_seen: string;
-        last_seen: string;
-        hit_count: number;
-      }[];
-      policy: { description: string; license: string; contact: string };
-    };
-    const typeWanted = type?.toLowerCase();
-    const filtered = data.iocs.filter((e) => !typeWanted || e.type.toLowerCase() === typeWanted);
-    const cap = Math.min(limit ?? 50, 500);
-    const rows = filtered.slice(0, cap);
-
-    if (rows.length === 0) {
-      return {
-        content: [
-          {
-            type: 'text' as const,
-            text: `No honeypot IOCs matched (total in feed: ${data.total_iocs}, window ${data.window_hours}h, generated ${data.generated_at}).`,
-          },
-        ],
-      };
-    }
-    const body = rows
-      .map(
-        (e, i) =>
-          `${i + 1}. [${e.type}] ${e.ioc}\n   hits: ${e.hit_count}  first: ${e.first_seen}  last: ${e.last_seen}`,
-      )
-      .join('\n');
-    const header = `TensorFeed honeypot IOCs (${rows.length} of ${filtered.length} matched, ${data.total_iocs} in feed, ${data.window_hours}h window, generated ${data.generated_at}):`;
-    const footer = `\n\nLicense: ${data.policy.license}. ${data.policy.description}`;
-    return { content: [{ type: 'text' as const, text: `${header}\n\n${body}${footer}` }] };
-  },
-);
-
-// ── Tool: check_afta_certification ──────────────────────────────────
-
-registerTool(
-  'check_afta_certification',
-  'Check whether a domain is AFTA-certified (Agent Fair-Trade Agreement). AFTA is an open standard: cryptographically-signed receipts, transparent pricing, no-charge guarantees for failed responses, on-chain settlement, and federated trust between participating sites. The check runs 6 deterministic probes against the target domain (e.g. tensorfeed.ai, terminalfeed.io): well-known endpoint, receipts endpoint, x402 payment manifest, pricing transparency, free trial availability, federation membership. Returns score, verdict, and which checks passed/failed.',
-  {
-    domain: z
-      .string()
-      .describe('Domain to certify (e.g. "tensorfeed.ai", "terminalfeed.io"). Bare host, no protocol.'),
-  },
-  async ({ domain }) => {
-    const data = (await fetchJSON(
-      `/afta-certify/check?domain=${encodeURIComponent(domain)}`,
-    )) as {
-      ok: boolean;
-      domain: string;
-      checked_at: string;
-      checks: { id?: string; name: string; passed: boolean; details?: string }[];
-      score: number;
-      max: number;
-      verdict: string;
-      afta_certified: boolean;
-      next_step?: string;
-      applied_to_directory?: boolean;
-    };
-    const lines = data.checks.map(
-      (c) => `  ${c.passed ? 'PASS' : 'FAIL'}  ${c.name}${c.details ? ` (${c.details})` : ''}`,
-    );
-    const certified = data.afta_certified ? 'AFTA-CERTIFIED' : 'NOT certified';
-    const next = data.next_step ? `\nNext step: ${data.next_step}` : '';
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: `Domain: ${data.domain}\nScore: ${data.score}/${data.max}\nVerdict: ${data.verdict} (${certified})\nChecked: ${data.checked_at}\n\nChecks:\n${lines.join('\n')}${next}`,
-        },
-      ],
-    };
-  },
-);
-
-// ── Tool: get_agent_reputation_card ─────────────────────────────────
-
-registerTool(
-  'get_agent_reputation_card',
-  'Get a TensorFeed Agent Reputation Bureau card for an EVM wallet address or a tf_live_ token prefix. Cards rebuild daily at 04:50 UTC from on-chain receipts plus TF telemetry. Includes reliability score, paid-call activity, total USDC spent, longest paid streak, composite trust score (0-1), trust grade (S/A/B/C/D), flags (sybil_risk, abuse, paid_free_ratio_low), operator-claim status (wallet -> display name signed by EOA), and per-metric leaderboard ranks. Returns null/404 for unknown agents (TF only builds cards for wallets observed in production). Useful for assessing third-party agent trustworthiness before delegating high-value work.',
-  {
-    wallet: z
-      .string()
-      .optional()
-      .describe('EVM wallet address (0x... 42 chars). Provide either this OR token_prefix.'),
-    token_prefix: z
-      .string()
-      .optional()
-      .describe('First N chars of an agent\'s tf_live_ bearer token. Useful when the agent has not signed an operator-claim yet.'),
-  },
-  async ({ wallet, token_prefix }) => {
-    if (!wallet && !token_prefix) {
-      return {
-        content: [
-          {
-            type: 'text' as const,
-            text: 'Provide either `wallet` (0x... EVM address) or `token_prefix` (tf_live_... token prefix). Both are accepted, one is required.',
-          },
-        ],
-      };
-    }
-    const path = wallet
-      ? `/agents/reputation/${encodeURIComponent(wallet)}`
-      : `/agents/reputation/by-token/${encodeURIComponent(token_prefix as string)}`;
-    let data: unknown;
-    try {
-      data = await fetchJSON(path);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      if (msg.includes('404') || msg.toLowerCase().includes('not_found')) {
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: `No reputation card for ${wallet ?? token_prefix}. TF only builds cards for wallets observed in production; if this is a real agent that has paid TF before, it should appear in the next daily rebuild (04:50 UTC).`,
-            },
-          ],
-        };
-      }
-      throw e;
-    }
-    // The card schema is rich; select the documented top-level fields and
-    // clamp any array so a large or inflated upstream card cannot blow the
-    // agent's context. Unknown fields still pass through (so the agent can
-    // reason over them) but every array is capped and the whole payload is
-    // bounded by the downstream sanitize char cap as a backstop.
-    const rawCard = (data as { card?: Record<string, unknown> }).card ?? (data as Record<string, unknown>);
-    const MAX_CARD_ARRAY = 25;
-    const clamped: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(rawCard)) {
-      if (Array.isArray(v) && v.length > MAX_CARD_ARRAY) {
-        clamped[k] = [...v.slice(0, MAX_CARD_ARRAY), `...[${v.length - MAX_CARD_ARRAY} more omitted]`];
-      } else {
-        clamped[k] = v;
-      }
-    }
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: `Agent reputation card for ${wallet ?? `token_prefix=${token_prefix}`}:\n\n${JSON.stringify(clamped, null, 2)}`,
-        },
-      ],
-    };
-  },
-);
-
 // ════════════════════════════════════════════════════════════════════
 // PREMIUM TOOLS (require TENSORFEED_TOKEN env var, paid in USDC on Base)
 // ════════════════════════════════════════════════════════════════════
 
-// ── Tool: get_account_balance ───────────────────────────────────────
+// ── Tool: account_status ────────────────────────────────────────────
+// Merges the former get_account_balance and get_account_usage tools into
+// one read. Both fetch calls and both output bodies are reused verbatim
+// and concatenated into a single text response.
 
 registerTool(
-  'get_account_balance',
-  'Check the credit balance for the configured TensorFeed bearer token. Free, but requires TENSORFEED_TOKEN to be set.',
+  'account_status',
+  'Check the configured TensorFeed token: current credit balance plus recent per-endpoint usage (last 100 calls aggregated). Free, but requires TENSORFEED_TOKEN.',
   {},
   async () => {
-    const data = (await fetchJSON('/payment/balance', { auth: true })) as {
-      balance: number;
-      created: string;
-      last_used: string;
-      total_purchased: number;
-    };
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: `Balance: ${data.balance} credits\nTotal purchased: ${data.total_purchased}\nCreated: ${data.created}\nLast used: ${data.last_used}`,
-        },
-      ],
-    };
-  },
-);
-
-// ── Tool: get_account_usage ─────────────────────────────────────────
-
-registerTool(
-  'get_account_usage',
-  'Show per-endpoint usage for the configured TensorFeed token (last 100 calls aggregated). Free, but requires TENSORFEED_TOKEN.',
-  {},
-  async () => {
-    const data = (await fetchJSON('/payment/usage', { auth: true })) as {
-      total_calls: number;
-      total_credits_spent: number;
-      by_endpoint: Record<string, { calls: number; credits: number; last_seen: string }>;
-    };
-    if (data.total_calls === 0) {
-      return { content: [{ type: 'text' as const, text: 'No premium API calls on this token yet.' }] };
+    // Balance and usage are independent reads; fetch them in parallel so the
+    // merged tool costs one round-trip of wall-clock time, not two.
+    const [balance, usage] = (await Promise.all([
+      fetchJSON('/payment/balance', { auth: true }),
+      fetchJSON('/payment/usage', { auth: true }),
+    ])) as [
+      { balance: number; created: string; last_used: string; total_purchased: number },
+      { total_calls: number; total_credits_spent: number; by_endpoint: Record<string, { calls: number; credits: number; last_seen: string }> },
+    ];
+    const balanceText = `Balance: ${balance.balance} credits\nTotal purchased: ${balance.total_purchased}\nCreated: ${balance.created}\nLast used: ${balance.last_used}`;
+    let usageText: string;
+    if (usage.total_calls === 0) {
+      usageText = 'No premium API calls on this token yet.';
+    } else {
+      const rows = Object.entries(usage.by_endpoint)
+        .sort(([, a], [, b]) => b.calls - a.calls)
+        .map(([ep, info]) => `  ${ep}: ${info.calls} calls, ${info.credits} credits, last ${info.last_seen}`)
+        .join('\n');
+      usageText = `Total: ${usage.total_calls} calls, ${usage.total_credits_spent} credits\n\n${rows}`;
     }
-    const rows = Object.entries(data.by_endpoint)
-      .sort(([, a], [, b]) => b.calls - a.calls)
-      .map(([ep, info]) => `  ${ep}: ${info.calls} calls, ${info.credits} credits, last ${info.last_seen}`)
-      .join('\n');
+
     return {
       content: [
         {
           type: 'text' as const,
-          text: `Total: ${data.total_calls} calls, ${data.total_credits_spent} credits\n\n${rows}`,
+          text: `${balanceText}\n\nUsage:\n${usageText}`,
         },
       ],
     };
   },
 );
 
-// ── Tool: premium_routing (1 credit) ────────────────────────────────
-
-registerTool(
-  'premium_routing',
-  'Get a ranked list of recommended AI models for a task (code, reasoning, creative, or general), each with a composite score plus the quality, availability, cost, and latency components that produced it, and the per-model input/output pricing. Constrain with budget, min_quality, and top_n so the ranking reflects your actual limits instead of a generic leaderboard. Costs 1 credit ($0.02), billed against your TENSORFEED_TOKEN. For a single signed routing decision with reasoning, see route_verdict.',
-  {
-    task: z.enum(['code', 'reasoning', 'creative', 'general']).optional().describe('Task type the model needs to be good at (default: general)'),
-    budget: z.number().optional().describe('Max blended USD per 1M tokens'),
-    min_quality: z.number().min(0).max(1).optional().describe('Minimum quality score in [0, 1]'),
-    top_n: z.number().min(1).max(10).optional().describe('How many models to return (default 5)'),
-  },
-  async ({ task, budget, min_quality, top_n }) => {
-    const params = new URLSearchParams();
-    if (task) params.set('task', task);
-    if (typeof budget === 'number') params.set('budget', String(budget));
-    if (typeof min_quality === 'number') params.set('min_quality', String(min_quality));
-    if (typeof top_n === 'number') params.set('top_n', String(top_n));
-    const data = (await fetchJSON(`/premium/routing?${params}`, { auth: true })) as {
-      task: string;
-      recommendations: {
-        rank: number;
-        model: { name: string; provider: string };
-        pricing: { input: number; output: number };
-        composite_score: number;
-        components: { quality: number; availability: number; cost: number; latency: number };
-      }[];
-      billing?: { credits_charged: number; credits_remaining?: number };
-    };
-    const list = data.recommendations
-      .map(r => {
-        const c = r.components;
-        return `  #${r.rank} ${r.model.name} (${r.model.provider}) score=${r.composite_score.toFixed(3)}\n     in $${r.pricing.input}/1M, out $${r.pricing.output}/1M\n     quality=${c.quality.toFixed(2)} avail=${c.availability.toFixed(2)} cost=${c.cost.toFixed(2)} latency=${c.latency.toFixed(2)}`;
-      })
-      .join('\n\n');
-    const billing = data.billing
-      ? `\n\nCharged ${data.billing.credits_charged} credit. Remaining: ${data.billing.credits_remaining}.`
-      : '';
-    return { content: [{ type: 'text' as const, text: `Routing for "${data.task}":\n\n${list}${billing}` }] };
-  },
-);
-
-// ── Tool: route_verdict_preview (free, 10/IP/day) ───────────────────
-// Free taste of the signed routing decision. Returns the single best
-// model for a task or named model, with the reasoning, but no ranked
-// runners-up, no constraint filters, and no AFTA-signed receipt. The
-// upgrade is route_verdict (1 credit). No auth, rate-limited 10/IP/day
-// by the worker.
+// ── Tool: route_verdict (tier: preview free / full 1 credit) ────────
+// One tool, two tiers. tier='preview' (default) is the free taste of
+// the signed routing decision: the single best model for a task or
+// named model with the reasoning, no auth, rate-limited 10/IP/day by
+// the worker. tier='full' burns 1 credit, adds ranked runners-up,
+// constraint filters, and an AFTA-signed receipt over the exact inputs.
 
 interface VerdictCandidatePayload {
   rank: number;
@@ -993,13 +484,19 @@ interface VerdictTrust {
 }
 
 registerTool(
-  'route_verdict_preview',
-  "Free. TensorFeed's signed routing decision that fuses live pricing, contamination-discounted benchmarks, real production usage, MEASURED p95 latency, incident state, and deprecation flags into the single best model for a task or a named model, with the reasoning. For ranked runners-up, constraint filters, and an AFTA-signed receipt you can audit, use route_verdict. 10 calls per day per IP.",
+  'route_verdict',
+  "TensorFeed's signed model-routing decision: the single best model for a task or named model, fused from live pricing, contamination-discounted benchmarks, real production usage, measured p95 latency, incident state, and deprecation flags, with the reasoning. tier='preview' (default) is free (10 calls per day per IP), top verdict only. tier='full' costs 1 credit ($0.02), adds ranked runners-up, constraint filters, and an AFTA-signed receipt you can audit, and needs a TENSORFEED_TOKEN. Get credits at tensorfeed.ai/developers/agent-payments.",
   {
+    tier: z.enum(['preview', 'full']).optional().describe("'preview' (default, free) or 'full' (1 credit; adds runners-up, filters, signed receipt)."),
     task: z.enum(['code', 'reasoning', 'creative', 'general']).optional().describe('Task type to route for (code, reasoning, creative, general). Provide task or model.'),
     model: z.string().optional().describe('Model id or display name to narrow the verdict to one model (e.g. "Claude Opus 4.7" or "claude-opus-4-7"). Provide task or model.'),
+    max_latency_p95_ms: z.number().optional().describe('Full tier only. Drop candidates whose measured p95 latency exceeds this value (ms).'),
+    budget: z.number().optional().describe('Full tier only. Max blended USD per 1M tokens.'),
+    min_quality: z.number().min(0).max(1).optional().describe('Full tier only. Minimum trust-discounted quality score in [0, 1].'),
+    require_operational: z.boolean().optional().describe('Full tier only. Default true. Set false to keep candidates known down or in failover.'),
+    exclude_deprecated: z.boolean().optional().describe('Full tier only. Default true. Set false to keep deprecated or sunsetted models.'),
   },
-  async ({ task, model }) => {
+  async ({ tier, task, model, max_latency_p95_ms, budget, min_quality, require_operational, exclude_deprecated }) => {
     if (!task && !model) {
       return {
         content: [
@@ -1013,6 +510,52 @@ registerTool(
     const params = new URLSearchParams();
     if (task) params.set('task', task);
     if (model) params.set('model', model);
+    if ((tier ?? 'preview') === 'full') {
+      if (typeof max_latency_p95_ms === 'number') params.set('max_latency_p95_ms', String(max_latency_p95_ms));
+      if (typeof budget === 'number') params.set('budget', String(budget));
+      if (typeof min_quality === 'number') params.set('min_quality', String(min_quality));
+      if (typeof require_operational === 'boolean') params.set('require_operational', String(require_operational));
+      if (typeof exclude_deprecated === 'boolean') params.set('exclude_deprecated', String(exclude_deprecated));
+      const data = (await fetchJSON(`/premium/route-verdict?${params}`, { auth: true })) as {
+        ok: boolean;
+        query: { task: string | null; model: string | null };
+        verdict: VerdictCandidatePayload | null;
+        runners_up: VerdictCandidatePayload[];
+        trust: VerdictTrust;
+        filters_applied: { max_latency_p95_ms: number | null; require_operational: boolean; exclude_deprecated: boolean };
+        claim: string;
+        billing?: { credits_charged: number; credits_remaining?: number };
+      };
+      if (!data.verdict) {
+        return {
+          content: [{ type: 'text' as const, text: `No routing verdict matched your filters.\n${data.claim ?? ''}` }],
+        };
+      }
+      const v = data.verdict;
+      const t = data.trust;
+      const f = data.filters_applied;
+      const runners = (data.runners_up ?? [])
+        .map((r) => `  #${r.rank} ${r.model.name} (${r.model.provider}) blended $${r.pricing.blended}/1M\n     ${r.why}`)
+        .join('\n');
+      const trustLine = `Trust: usage ${t.usage_corroborated ? 'corroborated' : 'uncorroborated'}, benchmark contamination ${t.benchmark_contamination}, operational ${t.operational_layer}, latency ${t.latency_layer}`;
+      const filterLine = `Filters: max p95 ${f.max_latency_p95_ms ?? 'none'}ms, require_operational ${f.require_operational}, exclude_deprecated ${f.exclude_deprecated}`;
+      const billing = data.billing
+        ? `\n\nCharged ${data.billing.credits_charged} credit. Remaining: ${data.billing.credits_remaining}.`
+        : '';
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text:
+              `Route Verdict: ${v.model.name} (${v.model.provider}) score ${v.composite_score}\n` +
+              `Why: ${v.why}\n` +
+              `Blended price: $${v.pricing.blended}/1M tokens (in $${v.pricing.input}, out $${v.pricing.output})\n\n` +
+              `Runners-up:\n${runners || '  (none)'}\n\n` +
+              `${trustLine}\n${filterLine}\n\nClaim: ${data.claim}${billing}`,
+          },
+        ],
+      };
+    }
     const data = (await fetchJSON(`/preview/route-verdict?${params}`)) as {
       ok: boolean;
       query: { task: string | null; model: string | null };
@@ -1047,86 +590,7 @@ registerTool(
             `Why: ${v.why}\n` +
             `Blended price: $${v.pricing.blended}/1M tokens (in $${v.pricing.input}, out $${v.pricing.output})\n` +
             `${trustLine}${fresh ? `\nData freshness: ${fresh}` : ''}\n` +
-            `Upgrade: route_verdict (1 credit, $0.02) adds ranked runners-up, constraint filters, and an AFTA-signed receipt you can audit. No USDC yet? Sign a wallet message at tensorfeed.ai/api/payment/trial-credits for 25 free credits.${rl}`,
-        },
-      ],
-    };
-  },
-);
-
-// ── Tool: route_verdict (1 credit) ──────────────────────────────────
-// The signed routing decision. Single best model plus ranked runners-up
-// for a task or named model, with constraint filters and an AFTA-signed
-// receipt over the exact inputs. Strict premium, no free trial. The free
-// route_verdict_preview is the no-auth taste of the same engine.
-
-registerTool(
-  'route_verdict',
-  "Costs 1 credit ($0.02). The signed routing decision: TensorFeed's single best model plus ranked runners-up for your task or a named model, fused from live pricing, contamination-discounted benchmarks, real production usage, MEASURED p95 latency, incident state, and deprecation flags, with an AFTA-signed receipt over the exact inputs so you can prove why you routed. Versus the free route_verdict_preview it adds ranked runners-up, constraint filters (max p95 latency, budget, min quality, operational-only, exclude-deprecated), the signed receipt, and no rate limit. Get credits at tensorfeed.ai/developers/agent-payments. Strict premium, no free trial.",
-  {
-    task: z.enum(['code', 'reasoning', 'creative', 'general']).optional().describe('Task type to route for (code, reasoning, creative, general). Provide task or model.'),
-    model: z.string().optional().describe('Model id or display name to narrow the verdict to one model. Provide task or model.'),
-    max_latency_p95_ms: z.number().optional().describe('Drop candidates whose measured p95 latency exceeds this value (ms).'),
-    budget: z.number().optional().describe('Max blended USD per 1M tokens'),
-    min_quality: z.number().min(0).max(1).optional().describe('Minimum trust-discounted quality score in [0, 1]'),
-    require_operational: z.boolean().optional().describe('Default true. Set false to keep candidates known down or in failover.'),
-    exclude_deprecated: z.boolean().optional().describe('Default true. Set false to keep deprecated or sunsetted models.'),
-  },
-  async ({ task, model, max_latency_p95_ms, budget, min_quality, require_operational, exclude_deprecated }) => {
-    if (!task && !model) {
-      return {
-        content: [
-          {
-            type: 'text' as const,
-            text: 'Provide a task (code, reasoning, creative, general) or a model id/name to get a signed routing verdict.',
-          },
-        ],
-      };
-    }
-    const params = new URLSearchParams();
-    if (task) params.set('task', task);
-    if (model) params.set('model', model);
-    if (typeof max_latency_p95_ms === 'number') params.set('max_latency_p95_ms', String(max_latency_p95_ms));
-    if (typeof budget === 'number') params.set('budget', String(budget));
-    if (typeof min_quality === 'number') params.set('min_quality', String(min_quality));
-    if (typeof require_operational === 'boolean') params.set('require_operational', String(require_operational));
-    if (typeof exclude_deprecated === 'boolean') params.set('exclude_deprecated', String(exclude_deprecated));
-    const data = (await fetchJSON(`/premium/route-verdict?${params}`, { auth: true })) as {
-      ok: boolean;
-      query: { task: string | null; model: string | null };
-      verdict: VerdictCandidatePayload | null;
-      runners_up: VerdictCandidatePayload[];
-      trust: VerdictTrust;
-      filters_applied: { max_latency_p95_ms: number | null; require_operational: boolean; exclude_deprecated: boolean };
-      claim: string;
-      billing?: { credits_charged: number; credits_remaining?: number };
-    };
-    if (!data.verdict) {
-      return {
-        content: [{ type: 'text' as const, text: `No routing verdict matched your filters.\n${data.claim ?? ''}` }],
-      };
-    }
-    const v = data.verdict;
-    const t = data.trust;
-    const f = data.filters_applied;
-    const runners = (data.runners_up ?? [])
-      .map((r) => `  #${r.rank} ${r.model.name} (${r.model.provider}) blended $${r.pricing.blended}/1M\n     ${r.why}`)
-      .join('\n');
-    const trustLine = `Trust: usage ${t.usage_corroborated ? 'corroborated' : 'uncorroborated'}, benchmark contamination ${t.benchmark_contamination}, operational ${t.operational_layer}, latency ${t.latency_layer}`;
-    const filterLine = `Filters: max p95 ${f.max_latency_p95_ms ?? 'none'}ms, require_operational ${f.require_operational}, exclude_deprecated ${f.exclude_deprecated}`;
-    const billing = data.billing
-      ? `\n\nCharged ${data.billing.credits_charged} credit. Remaining: ${data.billing.credits_remaining}.`
-      : '';
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text:
-            `Route Verdict: ${v.model.name} (${v.model.provider}) score ${v.composite_score}\n` +
-            `Why: ${v.why}\n` +
-            `Blended price: $${v.pricing.blended}/1M tokens (in $${v.pricing.input}, out $${v.pricing.output})\n\n` +
-            `Runners-up:\n${runners || '  (none)'}\n\n` +
-            `${trustLine}\n${filterLine}\n\nClaim: ${data.claim}${billing}`,
+            `Upgrade: route_verdict tier='full' (1 credit, $0.02) adds ranked runners-up, constraint filters, and an AFTA-signed receipt you can audit. No USDC yet? Sign a wallet message at tensorfeed.ai/api/payment/trial-credits for 25 free credits.${rl}`,
         },
       ],
     };
@@ -1134,9 +598,9 @@ registerTool(
 );
 
 // ════════════════════════════════════════════════════════════════════
-// Verdict family: 7 signed decisions, each a free preview tool plus a
-// 1-credit premium tool. Each preview calls fetchJSON('/preview/<x>')
-// (no auth, 10 calls per IP per day); each premium calls
+// Verdict family: 7 signed decisions, each a single tier-parameterized
+// tool. tier='preview' (default) calls fetchJSON('/preview/<x>') (no
+// auth, 10 calls per IP per day); tier='full' calls
 // fetchJSON('/premium/<x>', { auth: true }) and burns 1 credit. The
 // shapes below mirror the worker builder result interfaces exactly.
 // ════════════════════════════════════════════════════════════════════
@@ -1147,7 +611,7 @@ registerTool(
 // calls suffix.
 function verdictUpsell(tool: string, adds: string, rl: string): string {
   return (
-    `Upgrade: ${tool} (1 credit, $0.02) adds ${adds} and an AFTA-signed receipt. ` +
+    `Upgrade: call ${tool} again with tier="full" (1 credit, $0.02) for ${adds} and an AFTA-signed receipt. ` +
     `No USDC yet? Sign a wallet message at tensorfeed.ai/api/payment/trial-credits for 25 free credits.${rl}`
   );
 }
@@ -1171,7 +635,7 @@ function previewRateLine(rate?: VerdictRateLimit): string {
   return rate ? ` Preview: ${rate.remaining} of ${rate.limit} calls left today.` : '';
 }
 
-// ── Tool: provider_reliability_verdict_preview (free, 10/IP/day) ─────
+// ── Tool: provider_reliability_verdict (preview free / full 1 credit) ─
 
 interface ReliabilityRankEntryPayload {
   rank: number;
@@ -1187,10 +651,45 @@ interface ReliabilityRankEntryPayload {
 }
 
 registerTool(
-  'provider_reliability_verdict_preview',
-  "Free. TensorFeed's signed dependability ruling over its OWN measured latency and availability probes of the frontier AI providers. Names the single most-dependable provider to build on and the riskiest, scoring availability and tail consistency (p50 over p95) equally because an agent retry loop feels the tail, not the median. For the full per-provider ranking and an AFTA-signed receipt, use provider_reliability_verdict. 10 calls per day per IP.",
-  {},
-  async () => {
+  'provider_reliability_verdict',
+  "TensorFeed's signed dependability ruling over its OWN measured latency and availability probes of the frontier AI providers: the single most-dependable provider to build on and the riskiest, scoring availability and tail consistency (p50 over p95) equally because an agent retry loop feels the tail, not the median. tier='preview' (default) is free (10 calls per day per IP), top verdict only. tier='full' costs 1 credit ($0.02), adds the full per-provider ranking with measured availability and p50/p95/p99 and tail spread plus an AFTA-signed receipt, and needs a TENSORFEED_TOKEN. Get credits at tensorfeed.ai/developers/agent-payments.",
+  {
+    tier: z.enum(['preview', 'full']).optional().describe("'preview' (default, free) or 'full' (1 credit; adds the full per-provider ranking and signed receipt)."),
+  },
+  async ({ tier }) => {
+    if ((tier ?? 'preview') === 'full') {
+      const data = (await fetchJSON('/premium/provider-reliability-verdict', { auth: true })) as {
+        ok: boolean;
+        verdict: { most_dependable: string | null; riskiest: string | null };
+        ranking: ReliabilityRankEntryPayload[];
+        coverage: { providers_ranked: number; fully_measured: number; availability_only: number };
+        captured_at?: string | null;
+        capturedAt?: string | null;
+        claim: string;
+        billing?: VerdictBilling;
+      };
+      const v = data.verdict;
+      if (!v || !v.most_dependable) {
+        return { content: [{ type: 'text' as const, text: `No reliability verdict available right now.\n${data.claim ?? ''}` }] };
+      }
+      const ranking = (data.ranking ?? [])
+        .map((r) => `  #${r.rank} ${r.provider}: ${r.note}`)
+        .join('\n');
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text:
+              `Provider Reliability Verdict: most dependable ${v.most_dependable}` +
+              (v.riskiest ? `, riskiest ${v.riskiest}` : '') +
+              '\n\n' +
+              `Ranking:\n${ranking || '  (none)'}\n\n` +
+              `Claim: ${data.claim}` +
+              verdictBilling(data.billing),
+          },
+        ],
+      };
+    }
     const data = (await fetchJSON('/preview/provider-reliability-verdict')) as {
       ok: boolean;
       verdict: { most_dependable: string | null; riskiest: string | null };
@@ -1224,48 +723,7 @@ registerTool(
   },
 );
 
-// ── Tool: provider_reliability_verdict (1 credit) ───────────────────
-
-registerTool(
-  'provider_reliability_verdict',
-  "Costs 1 credit ($0.02). The signed provider dependability ruling over TensorFeed's OWN measured probes: ranks every probed frontier provider by availability and tail consistency (p50 over p95), names the most dependable and the riskiest, and ships the full per-provider ranking with an AFTA-signed receipt over the measurements. Versus the free provider_reliability_verdict_preview it adds the complete ranking with each provider's measured availability, p50/p95/p99, and tail spread, plus the receipt and no rate limit. 30-minute freshness SLA, no-charge when stale. Get credits at tensorfeed.ai/developers/agent-payments. Strict premium, no free trial.",
-  {},
-  async () => {
-    const data = (await fetchJSON('/premium/provider-reliability-verdict', { auth: true })) as {
-      ok: boolean;
-      verdict: { most_dependable: string | null; riskiest: string | null };
-      ranking: ReliabilityRankEntryPayload[];
-      coverage: { providers_ranked: number; fully_measured: number; availability_only: number };
-      captured_at?: string | null;
-      capturedAt?: string | null;
-      claim: string;
-      billing?: VerdictBilling;
-    };
-    const v = data.verdict;
-    if (!v || !v.most_dependable) {
-      return { content: [{ type: 'text' as const, text: `No reliability verdict available right now.\n${data.claim ?? ''}` }] };
-    }
-    const ranking = (data.ranking ?? [])
-      .map((r) => `  #${r.rank} ${r.provider}: ${r.note}`)
-      .join('\n');
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text:
-            `Provider Reliability Verdict: most dependable ${v.most_dependable}` +
-            (v.riskiest ? `, riskiest ${v.riskiest}` : '') +
-            '\n\n' +
-            `Ranking:\n${ranking || '  (none)'}\n\n` +
-            `Claim: ${data.claim}` +
-            verdictBilling(data.billing),
-        },
-      ],
-    };
-  },
-);
-
-// ── Tool: x402_settlement_verdict_preview (free, 10/IP/day) ──────────
+// ── Tool: x402_settlement_verdict (preview free / full 1 credit) ─────
 
 interface X402PublisherRankEntryPayload {
   rank: number;
@@ -1276,10 +734,56 @@ interface X402PublisherRankEntryPayload {
 }
 
 registerTool(
-  'x402_settlement_verdict_preview',
-  "Free. TensorFeed's signed ruling on the state of the x402 USDC settlement market on Base, computed over its OWN on-chain settlement index: market momentum versus the prior window, concentration, and the leading publisher. For the full per-publisher ranking, ecosystem totals, the Herfindahl concentration index, an optional window, and an AFTA-signed receipt, use x402_settlement_verdict. Covers the publishers TensorFeed indexes on Base, forward-only from launch. 10 calls per day per IP.",
-  {},
-  async () => {
+  'x402_settlement_verdict',
+  "TensorFeed's signed ruling on the state of the x402 USDC settlement market on Base, computed over its OWN on-chain settlement index: market momentum versus the prior window of equal length, concentration, and the leading publisher. Covers the publishers TensorFeed indexes on Base, forward-only from launch. tier='preview' (default) is free (10 calls per day per IP), headline verdict only. tier='full' costs 1 credit ($0.02), adds the full per-publisher ranking with volume share, ecosystem totals, the Herfindahl concentration index, an optional window, and an AFTA-signed receipt, and needs a TENSORFEED_TOKEN. Get credits at tensorfeed.ai/developers/agent-payments.",
+  {
+    tier: z.enum(['preview', 'full']).optional().describe("'preview' (default, free) or 'full' (1 credit; adds per-publisher ranking, totals, window, signed receipt)."),
+    window: z.enum(['24h', '7d', '30d']).optional().describe('Full tier only. Settlement window to rule over (24h, 7d, 30d). Default 7d.'),
+  },
+  async ({ tier, window }) => {
+    if ((tier ?? 'preview') === 'full') {
+      const params = new URLSearchParams();
+      if (window) params.set('window', window);
+      const qs = params.toString();
+      const data = (await fetchJSON(`/premium/x402-settlement-verdict${qs ? `?${qs}` : ''}`, { auth: true })) as {
+        ok: boolean;
+        verdict: { momentum: string; concentration: string; leading_publisher: string | null };
+        window_label: string | null;
+        ecosystem: {
+          volume_usdc: string;
+          count: number;
+          unique_publishers: number;
+          top_publisher_share_pct: number | null;
+          hhi: number | null;
+        };
+        ranking: X402PublisherRankEntryPayload[];
+        claim: string;
+        billing?: VerdictBilling;
+      };
+      const v = data.verdict;
+      const e = data.ecosystem;
+      const ranking = (data.ranking ?? [])
+        .map((r) => `  #${r.rank} ${r.domain}: ${r.volume_usdc} USDC over ${r.count} settlements (${r.share_pct}% share)`)
+        .join('\n');
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text:
+              `x402 Settlement Verdict (${data.window_label ?? '7d'}): momentum ${v.momentum}, concentration ${v.concentration}` +
+              (v.leading_publisher ? `, leading publisher ${v.leading_publisher}` : ', no leading publisher this window') +
+              '\n' +
+              `Ecosystem: ${e.volume_usdc} USDC over ${e.count} settlements across ${e.unique_publishers} publishers` +
+              (e.top_publisher_share_pct !== null ? `, top share ${e.top_publisher_share_pct}%` : '') +
+              (e.hhi !== null ? `, HHI ${e.hhi}` : '') +
+              '\n\n' +
+              `Ranking:\n${ranking || '  (none)'}\n\n` +
+              `Claim: ${data.claim}` +
+              verdictBilling(data.billing),
+          },
+        ],
+      };
+    }
     const data = (await fetchJSON('/preview/x402-settlement-verdict')) as {
       ok: boolean;
       verdict: { momentum: string; concentration: string; leading_publisher: string | null };
@@ -1312,72 +816,49 @@ registerTool(
   },
 );
 
-// ── Tool: x402_settlement_verdict (1 credit) ────────────────────────
+// ── Tool: x402_publisher_verdict (preview free / full 1 credit) ──────
 
 registerTool(
-  'x402_settlement_verdict',
-  "Costs 1 credit ($0.02). The signed ruling on the Base x402 USDC settlement market over TensorFeed's OWN settlement index: momentum versus the prior window of equal length, concentration by the Herfindahl index over publisher volume share, and the leading publisher, plus the full per-publisher ranking and an AFTA-signed receipt. Versus the free x402_settlement_verdict_preview it adds the per-publisher ranking with volume share, the ecosystem totals and concentration index, an optional window, and the receipt, with no rate limit. 10-minute freshness SLA, no-charge when stale. Get credits at tensorfeed.ai/developers/agent-payments. Strict premium, no free trial.",
+  'x402_publisher_verdict',
+  "TensorFeed's signed trust verdict on one x402 publisher, over its OWN on-chain settlement index: whether a named publisher domain is actively settling, recently quiet, registered with no settlement, unreachable, missing a Base payTo, or not indexed. Requires a domain. tier='preview' (default) is free (10 calls per day per IP), the trust verdict only. tier='full' costs 1 credit ($0.02), adds the 30-day settlement momentum, the shared-wallet risk flag, the settlement evidence (volume, count, last settled), and an AFTA-signed receipt, and needs a TENSORFEED_TOKEN. Get credits at tensorfeed.ai/developers/agent-payments.",
   {
-    window: z.enum(['24h', '7d', '30d']).optional().describe('Settlement window to rule over (24h, 7d, 30d). Default 7d.'),
-  },
-  async ({ window }) => {
-    const params = new URLSearchParams();
-    if (window) params.set('window', window);
-    const qs = params.toString();
-    const data = (await fetchJSON(`/premium/x402-settlement-verdict${qs ? `?${qs}` : ''}`, { auth: true })) as {
-      ok: boolean;
-      verdict: { momentum: string; concentration: string; leading_publisher: string | null };
-      window_label: string | null;
-      ecosystem: {
-        volume_usdc: string;
-        count: number;
-        unique_publishers: number;
-        top_publisher_share_pct: number | null;
-        hhi: number | null;
-      };
-      ranking: X402PublisherRankEntryPayload[];
-      claim: string;
-      billing?: VerdictBilling;
-    };
-    const v = data.verdict;
-    const e = data.ecosystem;
-    const ranking = (data.ranking ?? [])
-      .map((r) => `  #${r.rank} ${r.domain}: ${r.volume_usdc} USDC over ${r.count} settlements (${r.share_pct}% share)`)
-      .join('\n');
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text:
-            `x402 Settlement Verdict (${data.window_label ?? '7d'}): momentum ${v.momentum}, concentration ${v.concentration}` +
-            (v.leading_publisher ? `, leading publisher ${v.leading_publisher}` : ', no leading publisher this window') +
-            '\n' +
-            `Ecosystem: ${e.volume_usdc} USDC over ${e.count} settlements across ${e.unique_publishers} publishers` +
-            (e.top_publisher_share_pct !== null ? `, top share ${e.top_publisher_share_pct}%` : '') +
-            (e.hhi !== null ? `, HHI ${e.hhi}` : '') +
-            '\n\n' +
-            `Ranking:\n${ranking || '  (none)'}\n\n` +
-            `Claim: ${data.claim}` +
-            verdictBilling(data.billing),
-        },
-      ],
-    };
-  },
-);
-
-// ── Tool: x402_publisher_verdict_preview (free, 10/IP/day) ───────────
-
-registerTool(
-  'x402_publisher_verdict_preview',
-  "Free. TensorFeed's signed trust verdict on one x402 publisher, over its OWN on-chain settlement index: whether a named publisher domain is actively settling, recently quiet, registered with no settlement, unreachable, missing a Base payTo, or not indexed. For the 30-day settlement momentum, the shared-wallet risk flag, the settlement evidence, and an AFTA-signed receipt, use x402_publisher_verdict. Requires a domain. 10 calls per day per IP.",
-  {
+    tier: z.enum(['preview', 'full']).optional().describe("'preview' (default, free) or 'full' (1 credit; adds momentum, shared-wallet flag, evidence, signed receipt)."),
     domain: z.string().describe('Publisher domain to rule on, e.g. "x402.tavily.com". Required.'),
   },
-  async ({ domain }) => {
+  async ({ tier, domain }) => {
     if (!domain || !domain.trim()) {
       return { content: [{ type: 'text' as const, text: 'Provide a publisher domain (e.g. domain "x402.tavily.com") to get a trust verdict.' }] };
     }
     const params = new URLSearchParams({ domain: domain.trim() });
+    if ((tier ?? 'preview') === 'full') {
+      const data = (await fetchJSON(`/premium/x402-publisher-verdict?${params}`, { auth: true })) as {
+        ok: boolean;
+        domain: string;
+        verdict: string;
+        momentum: string;
+        trust: { wallet_shared: boolean; last_settled: string | null; pay_to_wallets: string[] };
+        evidence: { window_days: number; volume_usdc: string; count: number };
+        claim: string;
+        billing?: VerdictBilling;
+      };
+      const t = data.trust;
+      const ev = data.evidence;
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text:
+              `x402 Publisher Verdict for ${data.domain}: ${data.verdict}\n` +
+              `Momentum: ${data.momentum}. Shared wallet: ${t.wallet_shared ? 'yes (risk flag)' : 'no'}` +
+              (t.last_settled ? `. Last settled ${t.last_settled}` : '') +
+              '\n' +
+              `Evidence (${ev.window_days}d): ${ev.volume_usdc} USDC over ${ev.count} settlements\n` +
+              `Claim: ${data.claim}` +
+              verdictBilling(data.billing),
+          },
+        ],
+      };
+    }
     const data = (await fetchJSON(`/preview/x402-publisher-verdict?${params}`)) as {
       ok: boolean;
       domain: string;
@@ -1407,50 +888,7 @@ registerTool(
   },
 );
 
-// ── Tool: x402_publisher_verdict (1 credit) ─────────────────────────
-
-registerTool(
-  'x402_publisher_verdict',
-  "Costs 1 credit ($0.02). The signed trust verdict on a single x402 publisher over TensorFeed's OWN on-chain settlement index: whether its Base payTo is actively settling, its 30-day settlement momentum, a shared-wallet risk flag, and the settlement evidence, with an AFTA-signed receipt. Versus the free x402_publisher_verdict_preview it adds the momentum band, the shared-wallet flag, and the settlement evidence (volume, count, last settled, daily series), with no rate limit. A not-indexed domain is no-charge. 10-minute freshness SLA. Get credits at tensorfeed.ai/developers/agent-payments. Strict premium, no free trial.",
-  {
-    domain: z.string().describe('Publisher domain to rule on, e.g. "x402.tavily.com". Required.'),
-  },
-  async ({ domain }) => {
-    if (!domain || !domain.trim()) {
-      return { content: [{ type: 'text' as const, text: 'Provide a publisher domain (e.g. domain "x402.tavily.com") to get a signed trust verdict.' }] };
-    }
-    const params = new URLSearchParams({ domain: domain.trim() });
-    const data = (await fetchJSON(`/premium/x402-publisher-verdict?${params}`, { auth: true })) as {
-      ok: boolean;
-      domain: string;
-      verdict: string;
-      momentum: string;
-      trust: { wallet_shared: boolean; last_settled: string | null; pay_to_wallets: string[] };
-      evidence: { window_days: number; volume_usdc: string; count: number };
-      claim: string;
-      billing?: VerdictBilling;
-    };
-    const t = data.trust;
-    const ev = data.evidence;
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text:
-            `x402 Publisher Verdict for ${data.domain}: ${data.verdict}\n` +
-            `Momentum: ${data.momentum}. Shared wallet: ${t.wallet_shared ? 'yes (risk flag)' : 'no'}` +
-            (t.last_settled ? `. Last settled ${t.last_settled}` : '') +
-            '\n' +
-            `Evidence (${ev.window_days}d): ${ev.volume_usdc} USDC over ${ev.count} settlements\n` +
-            `Claim: ${data.claim}` +
-            verdictBilling(data.billing),
-        },
-      ],
-    };
-  },
-);
-
-// ── Tool: stack_safety_verdict_preview (free, 10/IP/day) ────────────
+// ── Tool: stack_safety_verdict (preview free / full 1 credit) ────────
 
 interface StackPackageSlim {
   package: string;
@@ -1462,17 +900,67 @@ interface StackPackageSlim {
   matched_cve_count: number;
 }
 
+interface MatchedCvePayload {
+  cve_id: string;
+  on_kev: boolean;
+  severity_label: string;
+  affected_version_ranges: string[];
+  fixed_versions: string[];
+}
+interface StackPackageFull {
+  package: string;
+  version: string | null;
+  verdict: string;
+  exploited: boolean;
+  fix_available: boolean;
+  matched_cves: MatchedCvePayload[];
+  reason: string;
+}
+
 registerTool(
-  'stack_safety_verdict_preview',
-  "Free. TensorFeed's deploy gate for an AI software stack: pass each package name (comma-separated name@version) and get the overall BLOCK / HOLD / PASS / UNKNOWN gate plus a per-package verdict, fusing the ingested AI-stack CVE batch with the CISA KEV catalog. Conservative by design: BLOCK only on an exploited CVE with no fix, HOLD when a known CVE applies and you must verify your version, PASS on no match, UNKNOWN outside the curated AI-stack cohort. For the matched-CVE evidence (ids, ranges, fixes, KEV status), up to 10 packages, and an AFTA-signed receipt, use stack_safety_verdict. Capped at 3 packages, 10 calls per day per IP.",
+  'stack_safety_verdict',
+  "TensorFeed's deploy gate for an AI software stack: pass each package as comma-separated name@version and get the overall BLOCK / HOLD / PASS / UNKNOWN gate plus a per-package verdict, fusing the ingested AI-stack CVE batch with the CISA KEV catalog. Conservative by design: BLOCK only on an exploited CVE with no fix, HOLD when a known CVE applies and you must verify your version, PASS on no match, UNKNOWN outside the curated AI-stack cohort. tier='preview' (default) is free (10 calls per day per IP), caps at 3 packages, gate plus worst offender. tier='full' costs 1 credit ($0.02), raises the cap to 10 packages, adds the matched-CVE evidence (ids, affected ranges, fixed versions, KEV status) and an AFTA-signed receipt, and needs a TENSORFEED_TOKEN. Get credits at tensorfeed.ai/developers/agent-payments.",
   {
-    packages: z.string().describe('Comma-separated AI-stack packages as name@version (e.g. "vllm@0.5.0,transformers@4.40.0"). Required. Preview caps at 3.'),
+    tier: z.enum(['preview', 'full']).optional().describe("'preview' (default, free, caps at 3 packages) or 'full' (1 credit; up to 10 packages, matched-CVE evidence, signed receipt)."),
+    packages: z.string().describe('Comma-separated AI-stack packages as name@version (e.g. "vllm@0.5.0,transformers@4.40.0"). Required. Preview caps at 3, full up to 10.'),
   },
-  async ({ packages }) => {
+  async ({ tier, packages }) => {
     if (!packages || !packages.trim()) {
       return { content: [{ type: 'text' as const, text: 'Provide packages as a comma-separated name@version list (e.g. "vllm@0.5.0,transformers@4.40.0") to get a deploy gate.' }] };
     }
     const params = new URLSearchParams({ packages: packages.trim() });
+    if ((tier ?? 'preview') === 'full') {
+      const data = (await fetchJSON(`/premium/stack-safety-verdict?${params}`, { auth: true })) as {
+        ok: boolean;
+        gate: string;
+        counts: { block: number; hold: number; pass: number; unknown: number };
+        packages: StackPackageFull[];
+        claim: string;
+        billing?: VerdictBilling;
+      };
+      const c = data.counts;
+      const lines = (data.packages ?? [])
+        .map((p) => {
+          const cves = p.matched_cves
+            .map((m) => `${m.cve_id}${m.on_kev ? ' (KEV)' : ''} ${m.severity_label}`)
+            .join('; ');
+          return `  ${p.package}${p.version ? `@${p.version}` : ''}: ${p.verdict}. ${p.reason}` + (cves ? `\n     CVEs: ${cves}` : '');
+        })
+        .join('\n');
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text:
+              `Stack Safety Verdict: gate ${data.gate}\n` +
+              `Counts: ${c.block} block, ${c.hold} hold, ${c.pass} pass, ${c.unknown} unknown\n\n` +
+              `${lines || '  (no packages)'}\n\n` +
+              `Claim: ${data.claim}` +
+              verdictBilling(data.billing),
+          },
+        ],
+      };
+    }
     const data = (await fetchJSON(`/preview/stack-safety-verdict?${params}`)) as {
       ok: boolean;
       gate: string;
@@ -1503,70 +991,7 @@ registerTool(
   },
 );
 
-// ── Tool: stack_safety_verdict (1 credit) ───────────────────────────
-
-interface MatchedCvePayload {
-  cve_id: string;
-  on_kev: boolean;
-  severity_label: string;
-  affected_version_ranges: string[];
-  fixed_versions: string[];
-}
-interface StackPackageFull {
-  package: string;
-  version: string | null;
-  verdict: string;
-  exploited: boolean;
-  fix_available: boolean;
-  matched_cves: MatchedCvePayload[];
-  reason: string;
-}
-
-registerTool(
-  'stack_safety_verdict',
-  "Costs 1 credit ($0.02). The signed deploy gate for an AI software stack (up to 10 packages): the overall BLOCK / HOLD / PASS / UNKNOWN gate and a per-package verdict, fusing the ingested AI-stack CVE batch with the CISA KEV catalog, plus the matched-CVE evidence and an AFTA-signed receipt. Versus the free stack_safety_verdict_preview it adds the matched-CVE ids, affected ranges, fixed versions, and KEV status per package, raises the cap to 10 packages, and ships the receipt, with no rate limit. Never-false-confirm: BLOCK only on exploited with no fix. Get credits at tensorfeed.ai/developers/agent-payments. Strict premium, no free trial.",
-  {
-    packages: z.string().describe('Comma-separated AI-stack packages as name@version (e.g. "vllm@0.5.0,transformers@4.40.0"). Required. Up to 10.'),
-  },
-  async ({ packages }) => {
-    if (!packages || !packages.trim()) {
-      return { content: [{ type: 'text' as const, text: 'Provide packages as a comma-separated name@version list (e.g. "vllm@0.5.0,transformers@4.40.0") to get a signed deploy gate.' }] };
-    }
-    const params = new URLSearchParams({ packages: packages.trim() });
-    const data = (await fetchJSON(`/premium/stack-safety-verdict?${params}`, { auth: true })) as {
-      ok: boolean;
-      gate: string;
-      counts: { block: number; hold: number; pass: number; unknown: number };
-      packages: StackPackageFull[];
-      claim: string;
-      billing?: VerdictBilling;
-    };
-    const c = data.counts;
-    const lines = (data.packages ?? [])
-      .map((p) => {
-        const cves = p.matched_cves
-          .map((m) => `${m.cve_id}${m.on_kev ? ' (KEV)' : ''} ${m.severity_label}`)
-          .join('; ');
-        return `  ${p.package}${p.version ? `@${p.version}` : ''}: ${p.verdict}. ${p.reason}` + (cves ? `\n     CVEs: ${cves}` : '');
-      })
-      .join('\n');
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text:
-            `Stack Safety Verdict: gate ${data.gate}\n` +
-            `Counts: ${c.block} block, ${c.hold} hold, ${c.pass} pass, ${c.unknown} unknown\n\n` +
-            `${lines || '  (no packages)'}\n\n` +
-            `Claim: ${data.claim}` +
-            verdictBilling(data.billing),
-        },
-      ],
-    };
-  },
-);
-
-// ── Tool: benchmark_trust_verdict_preview (free, 10/IP/day) ──────────
+// ── Tool: benchmark_trust_verdict (preview free / full 1 credit) ─────
 
 interface BenchmarkVerdictSlim {
   id: string;
@@ -1576,18 +1001,62 @@ interface BenchmarkVerdictSlim {
   trust_score: number;
 }
 
+interface BenchmarkVerdictFull {
+  id: string;
+  name: string;
+  category: string;
+  trust_band: string;
+  trust_score: number;
+  signals: { ceiling_proximity: string; frontier_compression: string };
+  recommendation: string;
+}
+
 registerTool(
-  'benchmark_trust_verdict_preview',
-  "Free. TensorFeed's signed ruling on whether an AI benchmark is still a trustworthy capability signal or saturated, contaminated, or near ceiling so a high score should be down-weighted. Returns a trust band (reliable, use_with_caution, saturated, contaminated, deprecated) and a 0-100 trust score per benchmark. Pass benchmark to narrow to one, or category to filter, or neither for the registry. For the per-signal detail (ceiling proximity, frontier compression, contamination) and the down-weight recommendation with an alternative, use benchmark_trust_verdict. 10 calls per day per IP.",
+  'benchmark_trust_verdict',
+  "TensorFeed's signed ruling on whether an AI benchmark is still a trustworthy capability signal or saturated, contaminated, or near ceiling so a high score should be down-weighted: a trust band (reliable, use_with_caution, saturated, contaminated, deprecated) and a 0-100 trust score per benchmark. Pass benchmark to narrow to one, or category to filter, or neither for the registry. tier='preview' (default) is free (10 calls per day per IP), top verdict and bands only. tier='full' costs 1 credit ($0.02), adds the per-signal detail (ceiling proximity, frontier compression, contamination), a down-weight recommendation with an alternative benchmark, and an AFTA-signed receipt, and needs a TENSORFEED_TOKEN. Get credits at tensorfeed.ai/developers/agent-payments.",
   {
+    tier: z.enum(['preview', 'full']).optional().describe("'preview' (default, free) or 'full' (1 credit; adds per-signal detail, recommendation, signed receipt)."),
     benchmark: z.string().optional().describe('Benchmark registry id or name to narrow to one (e.g. "mmlu", "swe-bench"). Optional.'),
     category: z.string().optional().describe('Category to filter the benchmarks (e.g. "coding", "reasoning"). Optional.'),
   },
-  async ({ benchmark, category }) => {
+  async ({ tier, benchmark, category }) => {
     const params = new URLSearchParams();
     if (benchmark) params.set('benchmark', benchmark);
     if (category) params.set('category', category);
     const qs = params.toString();
+    if ((tier ?? 'preview') === 'full') {
+      const data = (await fetchJSON(`/premium/benchmark-trust-verdict${qs ? `?${qs}` : ''}`, { auth: true })) as {
+        ok: boolean;
+        filter: { benchmark: string | null; category: string | null };
+        count: number;
+        verdicts: BenchmarkVerdictFull[];
+        claim: string;
+        billing?: VerdictBilling;
+      };
+      const verdicts = data.verdicts ?? [];
+      if (verdicts.length === 0) {
+        return { content: [{ type: 'text' as const, text: `No benchmark matched that filter.\n${data.claim ?? ''}` }] };
+      }
+      const lines = verdicts
+        .slice(0, 8)
+        .map(
+          (v) =>
+            `  ${v.name} (${v.category}): ${v.trust_band}, score ${v.trust_score}/100. Ceiling ${v.signals.ceiling_proximity}, frontier ${v.signals.frontier_compression}.\n     ${v.recommendation}`,
+        )
+        .join('\n');
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text:
+              `Benchmark Trust Verdict: ${data.count} benchmark${data.count === 1 ? '' : 's'} ruled on\n\n` +
+              `${lines}\n\n` +
+              `Claim: ${data.claim}` +
+              verdictBilling(data.billing),
+          },
+        ],
+      };
+    }
     const data = (await fetchJSON(`/preview/benchmark-trust-verdict${qs ? `?${qs}` : ''}`)) as {
       ok: boolean;
       filter: { benchmark: string | null; category: string | null };
@@ -1625,65 +1094,7 @@ registerTool(
   },
 );
 
-// ── Tool: benchmark_trust_verdict (1 credit) ────────────────────────
-
-interface BenchmarkVerdictFull {
-  id: string;
-  name: string;
-  category: string;
-  trust_band: string;
-  trust_score: number;
-  signals: { ceiling_proximity: string; frontier_compression: string };
-  recommendation: string;
-}
-
-registerTool(
-  'benchmark_trust_verdict',
-  "Costs 1 credit ($0.02). The signed ruling on whether an AI benchmark is a trustworthy capability signal or saturated, contaminated, or near ceiling: a trust band and 0-100 score per benchmark, the per-signal detail, a down-weight recommendation with an alternative benchmark, and an AFTA-signed receipt. Versus the free benchmark_trust_verdict_preview it adds the ceiling proximity, frontier compression, and contamination signals, the recommendation, and the receipt, with no rate limit. Pass benchmark to narrow to one, or category to filter, or neither for the registry. Get credits at tensorfeed.ai/developers/agent-payments. Strict premium, no free trial.",
-  {
-    benchmark: z.string().optional().describe('Benchmark registry id or name to narrow to one (e.g. "mmlu", "swe-bench"). Optional.'),
-    category: z.string().optional().describe('Category to filter the benchmarks (e.g. "coding", "reasoning"). Optional.'),
-  },
-  async ({ benchmark, category }) => {
-    const params = new URLSearchParams();
-    if (benchmark) params.set('benchmark', benchmark);
-    if (category) params.set('category', category);
-    const qs = params.toString();
-    const data = (await fetchJSON(`/premium/benchmark-trust-verdict${qs ? `?${qs}` : ''}`, { auth: true })) as {
-      ok: boolean;
-      filter: { benchmark: string | null; category: string | null };
-      count: number;
-      verdicts: BenchmarkVerdictFull[];
-      claim: string;
-      billing?: VerdictBilling;
-    };
-    const verdicts = data.verdicts ?? [];
-    if (verdicts.length === 0) {
-      return { content: [{ type: 'text' as const, text: `No benchmark matched that filter.\n${data.claim ?? ''}` }] };
-    }
-    const lines = verdicts
-      .slice(0, 8)
-      .map(
-        (v) =>
-          `  ${v.name} (${v.category}): ${v.trust_band}, score ${v.trust_score}/100. Ceiling ${v.signals.ceiling_proximity}, frontier ${v.signals.frontier_compression}.\n     ${v.recommendation}`,
-      )
-      .join('\n');
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text:
-            `Benchmark Trust Verdict: ${data.count} benchmark${data.count === 1 ? '' : 's'} ruled on\n\n` +
-            `${lines}\n\n` +
-            `Claim: ${data.claim}` +
-            verdictBilling(data.billing),
-        },
-      ],
-    };
-  },
-);
-
-// ── Tool: failover_verdict_preview (free, 10/IP/day) ────────────────
+// ── Tool: failover_verdict (preview free / full 1 credit) ────────────
 
 interface FailoverCandidateSlim {
   model: { id: string; name: string; provider: string };
@@ -1691,19 +1102,83 @@ interface FailoverCandidateSlim {
   composite_score: number;
 }
 
+interface FailoverCandidateFull {
+  rank: number;
+  model: { id: string; name: string; provider: string };
+  pricing: { blended: number };
+  latency: { measured_p95_ms: number | null };
+  operational: { ok: boolean | null; status: string };
+  composite_score: number;
+  why: string;
+}
+
 registerTool(
-  'failover_verdict_preview',
-  "Free. Provider A is degraded; TensorFeed's signed ruling on the single best operational provider to fail over to for a task right now. Confirms A against the live incident-triage feed, then runs the route-verdict fusion with A (and any provider already in failover) excluded. For the full failover candidate (pricing, measured latency, quality), the ranked alternatives, and an AFTA-signed receipt, use failover_verdict. Requires from. 10 calls per day per IP.",
+  'failover_verdict',
+  "Provider A is degraded; TensorFeed's signed ruling on the single best operational provider to fail over to for a task right now. Confirms A against the live incident-triage feed, then runs the route-verdict fusion with A (and any provider already in failover) excluded. Requires from. tier='preview' (default) is free (10 calls per day per IP), the failover target only. tier='full' costs 1 credit ($0.02), adds the full candidate (pricing, measured p95 latency, quality), the ranked alternatives, the confirmed incident on A, and an AFTA-signed receipt, and needs a TENSORFEED_TOKEN. Get credits at tensorfeed.ai/developers/agent-payments.",
   {
+    tier: z.enum(['preview', 'full']).optional().describe("'preview' (default, free) or 'full' (1 credit; adds candidate detail, ranked alternatives, incident, signed receipt)."),
     from: z.string().describe('The degraded provider to fail over FROM (e.g. "anthropic", "openai"). Required.'),
     task: z.enum(['code', 'reasoning', 'creative', 'general']).optional().describe('Task type to optimize the failover target for. Optional.'),
   },
-  async ({ from, task }) => {
+  async ({ tier, from, task }) => {
     if (!from || !from.trim()) {
       return { content: [{ type: 'text' as const, text: 'Provide a from provider (the degraded provider to fail over from, e.g. from "anthropic") to get a failover verdict.' }] };
     }
     const params = new URLSearchParams({ from: from.trim() });
     if (task) params.set('task', task);
+    if ((tier ?? 'preview') === 'full') {
+      const data = (await fetchJSON(`/premium/failover-verdict?${params}`, { auth: true })) as {
+        ok: boolean;
+        from: { provider: string; in_incident: boolean; incident: { title: string; recommended_action: string } | null };
+        query: { task: string | null; model: string | null };
+        excluded_providers: string[];
+        failover_to: FailoverCandidateFull | null;
+        alternatives: FailoverCandidateFull[];
+        why: string;
+        claim: string;
+        billing?: VerdictBilling;
+      };
+      const dest = data.failover_to;
+      const incidentLine = data.from.incident
+        ? `Incident on ${data.from.provider}: ${data.from.incident.title} (action ${data.from.incident.recommended_action})\n`
+        : '';
+      if (!dest) {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text:
+                `Failover Verdict from ${data.from.provider}: no operational failover target found.\n` +
+                incidentLine +
+                `Why: ${data.why}\nClaim: ${data.claim}` +
+                verdictBilling(data.billing),
+            },
+          ],
+        };
+      }
+      const alts = (data.alternatives ?? [])
+        .map(
+          (a) =>
+            `  #${a.rank} ${a.model.name} (${a.model.provider}) blended $${a.pricing.blended}/1M, p95 ${a.latency.measured_p95_ms ?? 'n/a'}ms, status ${a.operational.status}`,
+        )
+        .join('\n');
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text:
+              `Failover Verdict from ${data.from.provider}: fail over to ${dest.model.name} (${dest.model.provider})\n` +
+              `Why: ${dest.why}\n` +
+              `Blended $${dest.pricing.blended}/1M, p95 ${dest.latency.measured_p95_ms ?? 'n/a'}ms, status ${dest.operational.status}\n` +
+              incidentLine +
+              `Excluded: ${data.excluded_providers.length ? data.excluded_providers.join(', ') : 'none'}\n\n` +
+              `Alternatives:\n${alts || '  (none)'}\n\n` +
+              `Claim: ${data.claim}` +
+              verdictBilling(data.billing),
+          },
+        ],
+      };
+    }
     const data = (await fetchJSON(`/preview/failover-verdict?${params}`)) as {
       ok: boolean;
       from: { provider: string; in_incident: boolean };
@@ -1747,98 +1222,53 @@ registerTool(
   },
 );
 
-// ── Tool: failover_verdict (1 credit) ───────────────────────────────
-
-interface FailoverCandidateFull {
-  rank: number;
-  model: { id: string; name: string; provider: string };
-  pricing: { blended: number };
-  latency: { measured_p95_ms: number | null };
-  operational: { ok: boolean | null; status: string };
-  composite_score: number;
-  why: string;
-}
+// ── Tool: ssvc_verdict (preview free / full 1 credit) ────────────────
 
 registerTool(
-  'failover_verdict',
-  "Costs 1 credit ($0.02). The signed failover ruling: provider A is degraded, this is the best operational provider to fail over to for a task right now, with the full candidate (pricing, measured p95 latency, quality), the ranked alternatives, the confirmed incident on A, and an AFTA-signed receipt. Versus the free failover_verdict_preview it adds the candidate's pricing, measured latency, and quality, the ranked alternatives, and the receipt, with no rate limit. Confirms A against live incident triage and excludes any provider already in failover. 30-minute operational freshness SLA. Get credits at tensorfeed.ai/developers/agent-payments. Strict premium, no free trial.",
+  'ssvc_verdict',
+  "TensorFeed's signed SSVC patch-urgency decision for one CVE, applying the CISA SSVC Coordinator decision tree to the recorded Vulnrichment decision points (exploitation, automatable, technical impact). Requires a CVE id. tier='preview' (default) is free (10 calls per day per IP): the three decision points and the decision-tree provenance, WITHOUT the computed Act / Attend / Track / Track* decision. tier='full' costs 1 credit ($0.02), adds the computed decision across the full low/medium/high Mission and Well-being envelope, the per-level reasoning, a live CISA KEV cross-check, and an AFTA-signed receipt, and needs a TENSORFEED_TOKEN. Get credits at tensorfeed.ai/developers/agent-payments.",
   {
-    from: z.string().describe('The degraded provider to fail over FROM (e.g. "anthropic", "openai"). Required.'),
-    task: z.enum(['code', 'reasoning', 'creative', 'general']).optional().describe('Task type to optimize the failover target for. Optional.'),
+    tier: z.enum(['preview', 'full']).optional().describe("'preview' (default, free) or 'full' (1 credit; adds the computed decision, envelope, reasoning, KEV cross-check, signed receipt)."),
+    cve: z.string().describe('CVE id to rule on, e.g. "CVE-2024-3094". Required.'),
   },
-  async ({ from, task }) => {
-    if (!from || !from.trim()) {
-      return { content: [{ type: 'text' as const, text: 'Provide a from provider (the degraded provider to fail over from, e.g. from "anthropic") to get a signed failover verdict.' }] };
+  async ({ tier, cve }) => {
+    if (!cve || !cve.trim()) {
+      return { content: [{ type: 'text' as const, text: 'Provide a CVE id (e.g. cve "CVE-2024-3094") to get the SSVC decision points.' }] };
     }
-    const params = new URLSearchParams({ from: from.trim() });
-    if (task) params.set('task', task);
-    const data = (await fetchJSON(`/premium/failover-verdict?${params}`, { auth: true })) as {
-      ok: boolean;
-      from: { provider: string; in_incident: boolean; incident: { title: string; recommended_action: string } | null };
-      query: { task: string | null; model: string | null };
-      excluded_providers: string[];
-      failover_to: FailoverCandidateFull | null;
-      alternatives: FailoverCandidateFull[];
-      why: string;
-      claim: string;
-      billing?: VerdictBilling;
-    };
-    const dest = data.failover_to;
-    const incidentLine = data.from.incident
-      ? `Incident on ${data.from.provider}: ${data.from.incident.title} (action ${data.from.incident.recommended_action})\n`
-      : '';
-    if (!dest) {
+    const params = new URLSearchParams({ cve: cve.trim() });
+    if ((tier ?? 'preview') === 'full') {
+      const data = (await fetchJSON(`/premium/security/ssvc-verdict?${params}`, { auth: true })) as {
+        cve: string;
+        decision_points: { exploitation: string; automatable: string; technical_impact: string };
+        decision_primary: string;
+        decision_envelope: { low: string; medium: string; high: string };
+        tree: { name: string; version: string };
+        kev_cross_check?: { checked: boolean; kev_listed?: boolean; flag?: string };
+        scored_at: string;
+        billing?: VerdictBilling;
+      };
+      const dp = data.decision_points;
+      const env = data.decision_envelope;
+      const kev = data.kev_cross_check;
+      const kevLine = kev && kev.checked
+        ? `KEV cross-check: ${kev.kev_listed ? 'listed on CISA KEV' : 'not on KEV'}${kev.flag && kev.flag !== 'none' ? ` (${kev.flag})` : ''}`
+        : 'KEV cross-check: unavailable';
       return {
         content: [
           {
             type: 'text' as const,
             text:
-              `Failover Verdict from ${data.from.provider}: no operational failover target found.\n` +
-              incidentLine +
-              `Why: ${data.why}\nClaim: ${data.claim}` +
+              `SSVC Verdict for ${data.cve}: ${data.decision_primary} (Mission and Well-being assumed medium)\n` +
+              `Envelope: low ${env.low}, medium ${env.medium}, high ${env.high}\n` +
+              `Decision points: exploitation ${dp.exploitation}, automatable ${dp.automatable}, technical impact ${dp.technical_impact}\n` +
+              `${kevLine}\n` +
+              `Tree: ${data.tree.name} ${data.tree.version}` +
+              (data.scored_at ? `, scored ${data.scored_at}` : '') +
               verdictBilling(data.billing),
           },
         ],
       };
     }
-    const alts = (data.alternatives ?? [])
-      .map(
-        (a) =>
-          `  #${a.rank} ${a.model.name} (${a.model.provider}) blended $${a.pricing.blended}/1M, p95 ${a.latency.measured_p95_ms ?? 'n/a'}ms, status ${a.operational.status}`,
-      )
-      .join('\n');
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text:
-            `Failover Verdict from ${data.from.provider}: fail over to ${dest.model.name} (${dest.model.provider})\n` +
-            `Why: ${dest.why}\n` +
-            `Blended $${dest.pricing.blended}/1M, p95 ${dest.latency.measured_p95_ms ?? 'n/a'}ms, status ${dest.operational.status}\n` +
-            incidentLine +
-            `Excluded: ${data.excluded_providers.length ? data.excluded_providers.join(', ') : 'none'}\n\n` +
-            `Alternatives:\n${alts || '  (none)'}\n\n` +
-            `Claim: ${data.claim}` +
-            verdictBilling(data.billing),
-        },
-      ],
-    };
-  },
-);
-
-// ── Tool: ssvc_verdict_preview (free, 10/IP/day) ────────────────────
-
-registerTool(
-  'ssvc_verdict_preview',
-  "Free. The CISA SSVC decision points for one CVE, read from CISA's Vulnrichment record: exploitation, automatable, and technical impact, plus the decision-tree provenance, WITHOUT the computed Act / Attend / Track / Track* decision (that is the premium ruling). For the computed SSVC decision across the full Mission and Well-being envelope, the per-level reasoning, the live KEV cross-check, and an AFTA-signed receipt, use ssvc_verdict. Requires a CVE id. 10 calls per day per IP.",
-  {
-    cve: z.string().describe('CVE id to rule on, e.g. "CVE-2024-3094". Required.'),
-  },
-  async ({ cve }) => {
-    if (!cve || !cve.trim()) {
-      return { content: [{ type: 'text' as const, text: 'Provide a CVE id (e.g. cve "CVE-2024-3094") to get the SSVC decision points.' }] };
-    }
-    const params = new URLSearchParams({ cve: cve.trim() });
     const data = (await fetchJSON(`/preview/security/ssvc-verdict?${params}`)) as {
       cve: string;
       decision_points: { exploitation: string; automatable: string; technical_impact: string };
@@ -1871,65 +1301,57 @@ registerTool(
   },
 );
 
-// ── Tool: ssvc_verdict (1 credit) ───────────────────────────────────
+// Series window helper: convert a requested day count into a `from` date
+// (today minus days-1, UTC) for the premium date-range endpoints, which
+// take from/to rather than a days shorthand.
+function seriesFromDate(days: number): string {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() - (days - 1));
+  return d.toISOString().slice(0, 10);
+}
+
+// ── Tool: pricing_series (free 1 to 7 days, paid 8 to 90 days) ──────
 
 registerTool(
-  'ssvc_verdict',
-  "Costs 1 credit ($0.02). The signed SSVC patch-urgency decision for one CVE: applies the CISA SSVC Coordinator decision tree to the three recorded decision points and returns the decision (Act, Attend, Track, or Track*) across the full low/medium/high Mission and Well-being envelope, the per-level reasoning, a live CISA KEV cross-check, and an AFTA-signed receipt. Versus the free ssvc_verdict_preview it adds the computed decision, the envelope, the reasoning trace, the KEV staleness overlay, and the receipt, with no rate limit. A CVE not in Vulnrichment is no-charge. Get credits at tensorfeed.ai/developers/agent-payments. Strict premium, no free trial.",
+  'pricing_series',
+  'Daily price points for one AI model over a window. days 1 to 7 is free; days 8 to 90 costs 1 credit ($0.02) and needs a TENSORFEED_TOKEN, adding the min/max/delta summary over the longer window. Get credits at tensorfeed.ai/developers/agent-payments.',
   {
-    cve: z.string().describe('CVE id to rule on, e.g. "CVE-2024-3094". Required.'),
-  },
-  async ({ cve }) => {
-    if (!cve || !cve.trim()) {
-      return { content: [{ type: 'text' as const, text: 'Provide a CVE id (e.g. cve "CVE-2024-3094") to get a signed SSVC decision.' }] };
-    }
-    const params = new URLSearchParams({ cve: cve.trim() });
-    const data = (await fetchJSON(`/premium/security/ssvc-verdict?${params}`, { auth: true })) as {
-      cve: string;
-      decision_points: { exploitation: string; automatable: string; technical_impact: string };
-      decision_primary: string;
-      decision_envelope: { low: string; medium: string; high: string };
-      tree: { name: string; version: string };
-      kev_cross_check?: { checked: boolean; kev_listed?: boolean; flag?: string };
-      scored_at: string;
-      billing?: VerdictBilling;
-    };
-    const dp = data.decision_points;
-    const env = data.decision_envelope;
-    const kev = data.kev_cross_check;
-    const kevLine = kev && kev.checked
-      ? `KEV cross-check: ${kev.kev_listed ? 'listed on CISA KEV' : 'not on KEV'}${kev.flag && kev.flag !== 'none' ? ` (${kev.flag})` : ''}`
-      : 'KEV cross-check: unavailable';
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text:
-            `SSVC Verdict for ${data.cve}: ${data.decision_primary} (Mission and Well-being assumed medium)\n` +
-            `Envelope: low ${env.low}, medium ${env.medium}, high ${env.high}\n` +
-            `Decision points: exploitation ${dp.exploitation}, automatable ${dp.automatable}, technical impact ${dp.technical_impact}\n` +
-            `${kevLine}\n` +
-            `Tree: ${data.tree.name} ${data.tree.version}` +
-            (data.scored_at ? `, scored ${data.scored_at}` : '') +
-            verdictBilling(data.billing),
-        },
-      ],
-    };
-  },
-);
-
-// ── Tool: pricing_series_free (free, 7-day cap) ─────────────────────
-
-registerTool(
-  'pricing_series_free',
-  'Daily price points for one AI model over the last 1 to 7 days, free. For windows up to 90 days use pricing_series (1 credit).',
-  {
-    model: z.string().describe('Model id or display name (e.g. "Claude Opus 4.7" or "claude-opus-4-7")'),
-    days: z.number().min(1).max(7).optional().describe('Rolling window length 1 to 7 days (default 7)'),
+    model: z.string().describe('Model id or display name (e.g. "Claude Opus 4.7" or "claude-opus-4-7").'),
+    days: z.number().int().min(1).max(90).optional().describe('Window length (default 7). 1 to 7 free; 8 to 90 costs 1 credit.'),
   },
   async ({ model, days }) => {
-    const params = new URLSearchParams({ model });
-    if (typeof days === 'number') params.set('days', String(days));
+    const d = days ?? 7;
+    if (d > 7) {
+      const params = new URLSearchParams({ model, from: seriesFromDate(d) });
+      const data = (await fetchJSON(`/premium/history/pricing/series?${params}`, { auth: true })) as {
+        model: string;
+        provider: string | null;
+        points: { date: string; input: number; output: number; blended: number }[];
+        summary: {
+          first: { date: string; blended: number } | null;
+          latest: { date: string; blended: number } | null;
+          min_blended: number | null;
+          max_blended: number | null;
+          delta_pct_blended: number | null;
+          changes_detected: number;
+          days_with_data: number;
+        };
+        billing?: { credits_remaining?: number };
+      };
+      const s = data.summary;
+      const summary = s.first && s.latest
+        ? `${s.first.date} blended $${s.first.blended} -> ${s.latest.date} blended $${s.latest.blended} (${s.delta_pct_blended}%, ${s.changes_detected} changes, min $${s.min_blended}, max $${s.max_blended})`
+        : 'no data points in range';
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: `${data.model} (${data.provider ?? 'unknown'}) ${data.points.length} points\n${summary}\nCredits remaining: ${data.billing?.credits_remaining ?? '?'}`,
+          },
+        ],
+      };
+    }
+    const params = new URLSearchParams({ model, days: String(d) });
     const data = (await fetchJSON(`/history/pricing/series?${params}`)) as {
       model: string;
       provider: string | null;
@@ -1951,26 +1373,48 @@ registerTool(
       content: [
         {
           type: 'text' as const,
-          text: `${data.model} (${data.provider ?? 'unknown'}) ${data.points.length} points over ${data.points.length} days\n${summary}\nFor up to 90 days, use the pricing_series tool (1 credit).`,
+          text: `${data.model} (${data.provider ?? 'unknown'}) ${data.points.length} points over ${data.points.length} days\n${summary}\nFor up to 90 days, pass days 8 to 90 (1 credit).`,
         },
       ],
     };
   },
 );
 
-// ── Tool: benchmark_series_free (free, 7-day cap) ───────────────────
+// ── Tool: benchmark_series (free 1 to 7 days, paid 8 to 90 days) ────
 
 registerTool(
-  'benchmark_series_free',
-  'Daily benchmark scores for one model+benchmark over the last 1 to 7 days, free. Benchmark keys: swe_bench, mmlu_pro, gpqa_diamond, math, human_eval. For windows up to 90 days use benchmark_series (1 credit).',
+  'benchmark_series',
+  'Daily benchmark scores for one model+benchmark over a window. Benchmark keys: swe_bench, mmlu_pro, gpqa_diamond, math, human_eval. days 1 to 7 is free; days 8 to 90 costs 1 credit ($0.02) and needs a TENSORFEED_TOKEN, tracking score evolution over the longer window. Get credits at tensorfeed.ai/developers/agent-payments.',
   {
-    model: z.string().describe('Model id or display name'),
-    benchmark: z.string().describe('Benchmark key'),
-    days: z.number().min(1).max(7).optional().describe('Rolling window length 1 to 7 days (default 7)'),
+    model: z.string().describe('Model id or display name.'),
+    benchmark: z.string().describe('Benchmark key (e.g. swe_bench, mmlu_pro, gpqa_diamond, math, human_eval).'),
+    days: z.number().int().min(1).max(90).optional().describe('Window length (default 7). 1 to 7 free; 8 to 90 costs 1 credit.'),
   },
   async ({ model, benchmark, days }) => {
-    const params = new URLSearchParams({ model, benchmark });
-    if (typeof days === 'number') params.set('days', String(days));
+    const d = days ?? 7;
+    if (d > 7) {
+      const params = new URLSearchParams({ model, benchmark, from: seriesFromDate(d) });
+      const data = (await fetchJSON(`/premium/history/benchmarks/series?${params}`, { auth: true })) as {
+        model: string;
+        benchmark: string;
+        points: { date: string; score: number }[];
+        summary: { first: { date: string; score: number } | null; latest: { date: string; score: number } | null; delta_pp: number | null };
+        billing?: { credits_remaining?: number };
+      };
+      const s = data.summary;
+      const summary = s.first && s.latest
+        ? `${s.first.date} score ${s.first.score} -> ${s.latest.date} score ${s.latest.score} (delta ${s.delta_pp} pp)`
+        : 'no data in range';
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: `${data.model} on ${data.benchmark}: ${data.points.length} points\n${summary}\nCredits remaining: ${data.billing?.credits_remaining ?? '?'}`,
+          },
+        ],
+      };
+    }
+    const params = new URLSearchParams({ model, benchmark, days: String(d) });
     const data = (await fetchJSON(`/history/benchmarks/series?${params}`)) as {
       model: string;
       benchmark: string;
@@ -1992,18 +1436,47 @@ registerTool(
   },
 );
 
-// ── Tool: status_uptime_free (free, 7-day cap) ──────────────────────
+// ── Tool: status_uptime (free 1 to 7 days, paid 8 to 90 days) ───────
 
 registerTool(
-  'status_uptime_free',
-  'Daily uptime rollup for one provider over the last 1 to 7 days, free. For windows up to 90 days use status_uptime (1 credit).',
+  'status_uptime',
+  'Daily uptime rollup for one provider over a window with operational/degraded/down day counts and uptime % (degraded counts as half-credit). days 1 to 7 is free; days 8 to 90 costs 1 credit ($0.02) and needs a TENSORFEED_TOKEN, adding per-incident-day detail over the longer window. Get credits at tensorfeed.ai/developers/agent-payments.',
   {
-    provider: z.string().describe('Provider name (e.g. anthropic, openai, google)'),
-    days: z.number().min(1).max(7).optional().describe('Rolling window length 1 to 7 days (default 7)'),
+    provider: z.string().describe('Provider name (e.g. anthropic, openai, google).'),
+    days: z.number().int().min(1).max(90).optional().describe('Window length (default 7). 1 to 7 free; 8 to 90 costs 1 credit.'),
   },
   async ({ provider, days }) => {
-    const params = new URLSearchParams({ provider });
-    if (typeof days === 'number') params.set('days', String(days));
+    const d = days ?? 7;
+    if (d > 7) {
+      const params = new URLSearchParams({ provider, from: seriesFromDate(d) });
+      const data = (await fetchJSON(`/premium/history/status/uptime?${params}`, { auth: true })) as {
+        provider: string;
+        days_total: number;
+        days_with_data: number;
+        days_operational: number;
+        days_degraded: number;
+        days_down: number;
+        uptime_pct: number | null;
+        incident_days: { date: string; status: string }[];
+        billing?: { credits_remaining?: number };
+      };
+      const incidents = data.incident_days.length
+        ? '\n\nIncident days:\n' + data.incident_days.map(d2 => `  ${d2.date}: ${d2.status}`).join('\n')
+        : '';
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text:
+              `${data.provider} uptime: ${data.uptime_pct ?? 'n/a'}% over ${data.days_with_data} measured days (of ${data.days_total} in range)\n` +
+              `  operational: ${data.days_operational}, degraded: ${data.days_degraded}, down: ${data.days_down}` +
+              incidents +
+              `\nCredits remaining: ${data.billing?.credits_remaining ?? '?'}`,
+          },
+        ],
+      };
+    }
+    const params = new URLSearchParams({ provider, days: String(d) });
     const data = (await fetchJSON(`/history/status/uptime?${params}`)) as {
       provider: string;
       days_total: number;
@@ -2023,19 +1496,56 @@ registerTool(
   },
 );
 
-// ── Tool: status_leaderboard_free (free, 7-day cap) ─────────────────
+// ── Tool: status_leaderboard (free 1 to 7 days, paid 8 to 90 days) ──
 
 registerTool(
-  'status_leaderboard_free',
-  'Cross-provider uptime leaderboard, ranked by uptime % DESC. Free, 7-day cap. Computed from minute-resolution counters (~720 samples per provider per day). For 90-day windows plus incident_count and mttr_minutes per provider use status_leaderboard (1 credit).',
+  'status_leaderboard',
+  'Cross-provider uptime leaderboard ranked by uptime % DESC, computed from minute-resolution counters (~720 samples per provider per day). days 1 to 7 is free; days 8 to 90 costs 3 credits ($0.06) and needs a TENSORFEED_TOKEN, adding incident_count and mttr_minutes (mean time to recover) per provider over the longer window. Get credits at tensorfeed.ai/developers/agent-payments.',
   {
-    days: z.number().min(1).max(7).optional().describe('Rolling window length 1 to 7 days (default 7)'),
+    days: z.number().int().min(1).max(90).optional().describe('Window length (default 7). 1 to 7 free; 8 to 90 costs 3 credits.'),
   },
   async ({ days }) => {
-    const params = new URLSearchParams();
-    if (typeof days === 'number') params.set('days', String(days));
-    const qs = params.toString();
-    const data = (await fetchJSON(`/status/leaderboard${qs ? `?${qs}` : ''}`)) as {
+    const d = days ?? 7;
+    if (d > 7) {
+      const params = new URLSearchParams({ from: seriesFromDate(d) });
+      const data = (await fetchJSON(`/premium/status/leaderboard?${params}`, { auth: true })) as {
+        ok: boolean;
+        error?: string;
+        message?: string;
+        range?: { from: string; to: string; days: number };
+        entries?: {
+          provider: string;
+          rank: number;
+          uptime_pct: number;
+          polls: number;
+          downtime_minutes: number;
+          hard_down_minutes: number;
+          incident_count?: number;
+          mttr_minutes?: number | null;
+        }[];
+        billing?: { credits_remaining?: number };
+      };
+      if (!data.ok) {
+        return {
+          content: [{ type: 'text' as const, text: `Leaderboard unavailable: ${data.error ?? 'unknown'} - ${data.message ?? ''}` }],
+        };
+      }
+      const lines = (data.entries ?? []).map(
+        (e) =>
+          `#${e.rank} ${e.provider}: ${e.uptime_pct}% uptime, ${e.downtime_minutes}m downtime (${e.hard_down_minutes}m hard-down), ${e.incident_count ?? 0} incidents, MTTR ${e.mttr_minutes ?? 'n/a'}m`,
+      );
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text:
+              `AI provider uptime leaderboard ${data.range?.from} to ${data.range?.to}\n${lines.join('\n')}\n\nCredits remaining: ${data.billing?.credits_remaining ?? '?'}`,
+          },
+        ],
+      };
+    }
+    const params = new URLSearchParams({ days: String(d) });
+    const data = (await fetchJSON(`/status/leaderboard?${params}`)) as {
       ok: boolean;
       error?: string;
       message?: string;
@@ -2069,239 +1579,11 @@ registerTool(
   },
 );
 
-// ── Tool: pricing_series (1 credit) ─────────────────────────────────
-
-registerTool(
-  'pricing_series',
-  'Daily price points for one AI model with min/max/delta summary. Default range = last 30 days, max 90 days. Costs 1 credit ($0.02). Strict premium, no free trial; the 7-day-capped sibling pricing_series_free is the discovery option.',
-  {
-    model: z.string().describe('Model id or display name (e.g. "Claude Opus 4.7" or "claude-opus-4-7")'),
-    from: z.string().optional().describe('Start date YYYY-MM-DD UTC (default: 30 days ago)'),
-    to: z.string().optional().describe('End date YYYY-MM-DD UTC (default: today)'),
-  },
-  async ({ model, from, to }) => {
-    const params = new URLSearchParams({ model });
-    if (from) params.set('from', from);
-    if (to) params.set('to', to);
-    const data = (await fetchJSON(`/premium/history/pricing/series?${params}`, { auth: true })) as {
-      model: string;
-      provider: string | null;
-      points: { date: string; input: number; output: number; blended: number }[];
-      summary: {
-        first: { date: string; blended: number } | null;
-        latest: { date: string; blended: number } | null;
-        min_blended: number | null;
-        max_blended: number | null;
-        delta_pct_blended: number | null;
-        changes_detected: number;
-        days_with_data: number;
-      };
-      billing?: { credits_remaining?: number };
-    };
-    const s = data.summary;
-    const summary = s.first && s.latest
-      ? `${s.first.date} blended $${s.first.blended} -> ${s.latest.date} blended $${s.latest.blended} (${s.delta_pct_blended}%, ${s.changes_detected} changes, min $${s.min_blended}, max $${s.max_blended})`
-      : 'no data points in range';
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: `${data.model} (${data.provider ?? 'unknown'}) ${data.points.length} points\n${summary}\nCredits remaining: ${data.billing?.credits_remaining ?? '?'}`,
-        },
-      ],
-    };
-  },
-);
-
-// ── Tool: benchmark_series (1 credit) ───────────────────────────────
-
-registerTool(
-  'benchmark_series',
-  'Score evolution for a single benchmark on one AI model. Costs 1 credit ($0.02). Strict premium, no free trial; the 7-day-capped sibling benchmark_series_free is the discovery option. Benchmark keys: swe_bench, mmlu_pro, gpqa_diamond, math, human_eval.',
-  {
-    model: z.string().describe('Model id or display name'),
-    benchmark: z.string().describe('Benchmark key (e.g. swe_bench, mmlu_pro, gpqa_diamond, math, human_eval)'),
-    from: z.string().optional().describe('Start date YYYY-MM-DD UTC (default: 30 days ago)'),
-    to: z.string().optional().describe('End date YYYY-MM-DD UTC (default: today)'),
-  },
-  async ({ model, benchmark, from, to }) => {
-    const params = new URLSearchParams({ model, benchmark });
-    if (from) params.set('from', from);
-    if (to) params.set('to', to);
-    const data = (await fetchJSON(`/premium/history/benchmarks/series?${params}`, { auth: true })) as {
-      model: string;
-      benchmark: string;
-      points: { date: string; score: number }[];
-      summary: { first: { date: string; score: number } | null; latest: { date: string; score: number } | null; delta_pp: number | null };
-      billing?: { credits_remaining?: number };
-    };
-    const s = data.summary;
-    const summary = s.first && s.latest
-      ? `${s.first.date} score ${s.first.score} -> ${s.latest.date} score ${s.latest.score} (delta ${s.delta_pp} pp)`
-      : 'no data in range';
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: `${data.model} on ${data.benchmark}: ${data.points.length} points\n${summary}\nCredits remaining: ${data.billing?.credits_remaining ?? '?'}`,
-        },
-      ],
-    };
-  },
-);
-
-// ── Tool: status_uptime (1 credit) ──────────────────────────────────
-
-registerTool(
-  'status_uptime',
-  'Daily uptime rollup for one provider with operational/degraded/down day counts and uptime % (degraded counts as half-credit). Costs 1 credit ($0.02). Strict premium, no free trial; the 7-day-capped sibling status_uptime_free is the discovery option.',
-  {
-    provider: z.string().describe('Provider name (e.g. anthropic, openai, google)'),
-    from: z.string().optional().describe('Start date YYYY-MM-DD UTC (default: 30 days ago)'),
-    to: z.string().optional().describe('End date YYYY-MM-DD UTC (default: today)'),
-  },
-  async ({ provider, from, to }) => {
-    const params = new URLSearchParams({ provider });
-    if (from) params.set('from', from);
-    if (to) params.set('to', to);
-    const data = (await fetchJSON(`/premium/history/status/uptime?${params}`, { auth: true })) as {
-      provider: string;
-      days_total: number;
-      days_with_data: number;
-      days_operational: number;
-      days_degraded: number;
-      days_down: number;
-      uptime_pct: number | null;
-      incident_days: { date: string; status: string }[];
-      billing?: { credits_remaining?: number };
-    };
-    const incidents = data.incident_days.length
-      ? '\n\nIncident days:\n' + data.incident_days.map(d => `  ${d.date}: ${d.status}`).join('\n')
-      : '';
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text:
-            `${data.provider} uptime: ${data.uptime_pct ?? 'n/a'}% over ${data.days_with_data} measured days (of ${data.days_total} in range)\n` +
-            `  operational: ${data.days_operational}, degraded: ${data.days_degraded}, down: ${data.days_down}` +
-            incidents +
-            `\nCredits remaining: ${data.billing?.credits_remaining ?? '?'}`,
-        },
-      ],
-    };
-  },
-);
-
-// ── Tool: status_leaderboard (1 credit) ─────────────────────────────
-
-registerTool(
-  'status_leaderboard',
-  'Cross-provider uptime leaderboard for a custom date range up to 90 days. Same minute-resolution counter source as status_leaderboard_free, but adds incident_count and mttr_minutes (mean time to recover) per provider. Sorted by uptime % DESC. Costs 3 credits ($0.06). Strict premium, no free trial; the 7-day-capped sibling status_leaderboard_free is the discovery option.',
-  {
-    from: z.string().optional().describe('Start date YYYY-MM-DD UTC (default: 30 days ago)'),
-    to: z.string().optional().describe('End date YYYY-MM-DD UTC (default: today)'),
-  },
-  async ({ from, to }) => {
-    const params = new URLSearchParams();
-    if (from) params.set('from', from);
-    if (to) params.set('to', to);
-    const data = (await fetchJSON(`/premium/status/leaderboard?${params}`, { auth: true })) as {
-      ok: boolean;
-      error?: string;
-      message?: string;
-      range?: { from: string; to: string; days: number };
-      entries?: {
-        provider: string;
-        rank: number;
-        uptime_pct: number;
-        polls: number;
-        downtime_minutes: number;
-        hard_down_minutes: number;
-        incident_count?: number;
-        mttr_minutes?: number | null;
-      }[];
-      billing?: { credits_remaining?: number };
-    };
-    if (!data.ok) {
-      return {
-        content: [{ type: 'text' as const, text: `Leaderboard unavailable: ${data.error ?? 'unknown'} - ${data.message ?? ''}` }],
-      };
-    }
-    const lines = (data.entries ?? []).map(
-      (e) =>
-        `#${e.rank} ${e.provider}: ${e.uptime_pct}% uptime, ${e.downtime_minutes}m downtime (${e.hard_down_minutes}m hard-down), ${e.incident_count ?? 0} incidents, MTTR ${e.mttr_minutes ?? 'n/a'}m`,
-    );
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text:
-            `AI provider uptime leaderboard ${data.range?.from} to ${data.range?.to}\n${lines.join('\n')}\n\nCredits remaining: ${data.billing?.credits_remaining ?? '?'}`,
-        },
-      ],
-    };
-  },
-);
-
-// ── Tool: premium_agents_directory (1 credit) ───────────────────────
-
-registerTool(
-  'premium_agents_directory',
-  'Enriched AI agents catalog joined with live status, recent news, agent traffic, flagship pricing, and a 0-100 trending_score. Costs 1 credit ($0.02).',
-  {
-    category: z.string().optional().describe('coding, research, general, creative, frameworks'),
-    status: z.enum(['operational', 'degraded', 'down', 'unknown']).optional(),
-    open_source: z.boolean().optional(),
-    sort: z.enum(['trending', 'alphabetical', 'status', 'price_low', 'price_high', 'news_count']).optional(),
-    limit: z.number().min(1).max(100).optional(),
-  },
-  async ({ category, status, open_source, sort, limit }) => {
-    const params = new URLSearchParams();
-    if (category) params.set('category', category);
-    if (status) params.set('status', status);
-    if (typeof open_source === 'boolean') params.set('open_source', String(open_source));
-    if (sort) params.set('sort', sort);
-    if (typeof limit === 'number') params.set('limit', String(limit));
-    const data = (await fetchJSON(`/premium/agents/directory?${params}`, { auth: true })) as {
-      total: number;
-      returned: number;
-      sort: string;
-      agents: {
-        id: string;
-        name: string;
-        provider: string;
-        category: string;
-        live_status: string;
-        recent_news_count: number;
-        flagship_pricing: { model: string; blended: number } | null;
-        trending_score: number;
-      }[];
-      billing?: { credits_remaining?: number };
-    };
-    const list = data.agents
-      .map(
-        a =>
-          `  ${a.name} (${a.provider}) [${a.category}] status=${a.live_status} score=${a.trending_score} news=${a.recent_news_count}` +
-          (a.flagship_pricing ? ` flagship=${a.flagship_pricing.model} $${a.flagship_pricing.blended}/1M` : ''),
-      )
-      .join('\n');
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: `Agents (sort: ${data.sort}, ${data.returned} of ${data.total}):\n\n${list}\n\nCredits remaining: ${data.billing?.credits_remaining ?? '?'}`,
-        },
-      ],
-    };
-  },
-);
-
 // ── Tool: whats_new (1 credit) ──────────────────────────────────────
 
 registerTool(
   'whats_new',
-  'Agent morning brief: pricing changes, new/removed models, status incidents, and top news from the last 1-7 days. The tool to call when your agent boots up. Costs 1 credit ($0.02).',
+  'Catch up on everything that changed in AI in one call: pricing moves, new and removed models, status incidents, and top news from the last 1 to 7 days, so your agent boots with current context instead of stale assumptions. Costs 1 credit ($0.02).',
   {
     days: z.number().min(1).max(7).optional().describe('Window length in days (default 1)'),
     news_limit: z.number().min(1).max(25).optional().describe('Max news headlines (default 10)'),
@@ -2354,7 +1636,7 @@ registerTool(
 
 registerTool(
   'compare_models',
-  'Side-by-side comparison of 2-5 AI models. Returns pricing, benchmarks (normalized to a union of keys with null for missing scores), provider status, and recent news per model, plus rankings (cheapest blended, most context, per-benchmark leaderboard). Costs 1 credit ($0.02).',
+  'Pick between models in one call: pricing, benchmarks, status, and recent news for 2 to 5 models side by side, with cheapest-blended and per-benchmark rankings, so you choose without scraping each provider. Costs 1 credit ($0.02).',
   {
     ids: z.string().describe('Comma-separated list of 2-5 model ids or display names. Examples: "Claude Opus 4.7,GPT-5.5,Gemini 3" or "opus-4-7,gpt-5-5"'),
   },
@@ -2402,7 +1684,7 @@ registerTool(
 
 registerTool(
   'provider_deepdive',
-  'Everything about an AI provider in one call: live status, all models with pricing + tier + benchmark scores joined in, recent news mentions, and agent traffic. Costs 3 credits ($0.06). Strict premium, no free trial. Aggregation IS the value; doing this from free endpoints would take 4 round-trips.',
+  'Everything about one AI provider in a single call: live status, every model with pricing, tier, and benchmarks joined in, recent news, and agent traffic, replacing about four separate lookups. Costs 3 credits ($0.06). Strict premium, no free trial.',
   {
     provider: z.string().describe('Provider id or display name (case-insensitive). Examples: anthropic, openai, google, mistral, cohere'),
   },
@@ -2444,103 +1726,6 @@ registerTool(
   },
 );
 
-// ── Tool: cost_projection (1 credit) ────────────────────────────────
-
-registerTool(
-  'cost_projection',
-  'Project the cost of a token-usage workload across 1-10 AI models. Returns daily/weekly/monthly/yearly totals per model and a ranking by cheapest monthly. Costs 1 credit ($0.02).',
-  {
-    models: z.string().describe('One model or comma-separated list of up to 10 (e.g. "Claude Opus 4.7,GPT-5.5,Gemini 3"). Names or ids both work.'),
-    input_tokens_per_day: z.number().min(0).describe('Expected daily input token volume'),
-    output_tokens_per_day: z.number().min(0).describe('Expected daily output token volume'),
-    horizon: z.enum(['daily', 'weekly', 'monthly', 'yearly']).optional().describe('Primary horizon to highlight (default monthly). All four are always computed.'),
-  },
-  async ({ models, input_tokens_per_day, output_tokens_per_day, horizon }) => {
-    const params = new URLSearchParams({
-      model: models,
-      input_tokens_per_day: String(input_tokens_per_day),
-      output_tokens_per_day: String(output_tokens_per_day),
-    });
-    if (horizon) params.set('horizon', horizon);
-    const data = (await fetchJSON(`/premium/cost/projection?${params}`, { auth: true })) as {
-      workload: { input_tokens_per_day: number; output_tokens_per_day: number };
-      projections: (
-        | { model: string; provider: string; matched: true; daily: { total: number }; weekly_total: number; monthly_total: number; yearly_total: number; rates: { input_per_1m: number; output_per_1m: number } }
-        | { model: string; matched: false; reason: string }
-      )[];
-      ranked_cheapest_monthly: { model: string; provider: string; monthly_total: number }[];
-      billing?: { credits_remaining?: number };
-    };
-    const lines = data.projections.map(p => {
-      if (!p.matched) return `  ${p.model}: not found in pricing catalog`;
-      return `  ${p.model} (${p.provider}): $${p.daily.total}/day, $${p.weekly_total}/wk, $${p.monthly_total}/mo, $${p.yearly_total}/yr (in $${p.rates.input_per_1m}/1M, out $${p.rates.output_per_1m}/1M)`;
-    }).join('\n');
-    const ranked = data.ranked_cheapest_monthly.length
-      ? '\n\nCheapest monthly:\n' +
-        data.ranked_cheapest_monthly
-          .map((r, i) => `  #${i + 1} ${r.model} (${r.provider}): $${r.monthly_total}/mo`)
-          .join('\n')
-      : '';
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text:
-            `Workload: ${data.workload.input_tokens_per_day} input + ${data.workload.output_tokens_per_day} output tokens/day\n\n${lines}${ranked}\n\nCredits remaining: ${data.billing?.credits_remaining ?? '?'}`,
-        },
-      ],
-    };
-  },
-);
-
-// ── Tool: news_search (1 credit) ────────────────────────────────────
-
-registerTool(
-  'news_search',
-  'Full-text search over the TensorFeed news article corpus with optional date range, provider, and category filters. Relevance scoring with recency boost. Costs 1 credit ($0.02).',
-  {
-    q: z.string().optional().describe('Free-text query, e.g. "claude opus pricing". Omit to browse latest filtered articles.'),
-    from: z.string().optional().describe('Start date YYYY-MM-DD UTC (inclusive)'),
-    to: z.string().optional().describe('End date YYYY-MM-DD UTC (inclusive end-of-day)'),
-    provider: z.string().optional().describe('Substring match against source name and domain (e.g. "anthropic", "openai", "techcrunch")'),
-    category: z.string().optional().describe('Substring match against article categories'),
-    limit: z.number().min(1).max(100).optional().describe('Max results (default 25, max 100)'),
-  },
-  async ({ q, from, to, provider, category, limit }) => {
-    const params = new URLSearchParams();
-    if (q) params.set('q', q);
-    if (from) params.set('from', from);
-    if (to) params.set('to', to);
-    if (provider) params.set('provider', provider);
-    if (category) params.set('category', category);
-    if (typeof limit === 'number') params.set('limit', String(limit));
-    const data = (await fetchJSON(`/premium/news/search?${params}`, { auth: true })) as {
-      query: string | null;
-      matched: number;
-      returned: number;
-      results: { title: string; url: string; source: string; published_at: string; relevance: number; matched_terms: string[]; snippet: string }[];
-      billing?: { credits_remaining?: number };
-    };
-    if (data.results.length === 0) {
-      return { content: [{ type: 'text' as const, text: `No articles matched. (matched: ${data.matched})` }] };
-    }
-    const list = data.results
-      .map(
-        (r, i) =>
-          `${i + 1}. ${r.title} (${r.source})\n   ${r.url}\n   ${r.published_at} | relevance ${r.relevance}${r.matched_terms.length ? ` | terms: ${r.matched_terms.join(', ')}` : ''}\n   ${r.snippet}`,
-      )
-      .join('\n\n');
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: `${data.returned} of ${data.matched} matches${data.query ? ` for "${data.query}"` : ''}:\n\n${list}\n\nCredits remaining: ${data.billing?.credits_remaining ?? '?'}`,
-        },
-      ],
-    };
-  },
-);
-
 // ── Tool: list_watches ──────────────────────────────────────────────
 
 registerTool(
@@ -2576,140 +1761,134 @@ registerTool(
   },
 );
 
-// ── Tool: create_price_watch (1 credit) ─────────────────────────────
+// ── Tool: create_watch (1 credit) ───────────────────────────────────
+// Merges the four former create_*_watch tools (price, status, digest,
+// leaderboard_rank) into one type-selected tool. Each case below builds
+// the EXACT body and uses the EXACT output formatting the matching old
+// create_*_watch tool used, against the same /premium/watches endpoint.
 
 registerTool(
-  'create_price_watch',
-  'Register a webhook watch on a model price change. Costs 1 credit ($0.02). Watch lives 90 days. Each fire is an HMAC-signed POST to callback_url.',
+  'create_watch',
+  'Register a webhook watch. type selects what to watch: "price" (a model price change), "status" (a service status transition), "digest" (a scheduled daily or weekly pricing summary), or "leaderboard_rank" (a provider crossing an uptime-rank threshold). Costs 1 credit ($0.02) at registration; the watch lives 90 days and each fire is an HMAC-signed POST to callback_url. Needs a TENSORFEED_TOKEN.',
   {
-    model: z.string().describe('Model name (e.g. "Claude Opus 4.7")'),
-    field: z.enum(['inputPrice', 'outputPrice', 'blended']).describe('Which price field to watch'),
-    op: z.enum(['lt', 'gt', 'changes']).describe('Trigger: lt = below threshold, gt = above, changes = any change'),
-    threshold: z.number().optional().describe('Required when op is lt or gt; ignored for changes'),
-    callback_url: z.string().describe('HTTPS URL to POST to when the watch fires'),
-    secret: z.string().optional().describe('Optional shared secret used to HMAC-sign delivery bodies'),
+    type: z.enum(['price', 'status', 'digest', 'leaderboard_rank']).describe('What to watch.'),
+    callback_url: z.string().describe('HTTPS URL that receives the HMAC-signed POST when the watch fires.'),
+    secret: z.string().optional().describe('Optional shared secret used to HMAC-sign delivery bodies.'),
+    model: z.string().optional().describe('type=price only. Model name (e.g. "Claude Opus 4.7").'),
+    field: z.enum(['inputPrice', 'outputPrice', 'blended']).optional().describe('type=price only. Which price field to watch.'),
+    cadence: z.enum(['daily', 'weekly']).optional().describe('type=digest only. How often the digest fires.'),
+    provider: z.string().optional().describe('type=status or type=leaderboard_rank only. Provider name or slug (case-insensitive). e.g. anthropic, openai, gemini, bedrock, azure.'),
+    op: z
+      .enum(['lt', 'gt', 'changes', 'becomes', 'drops_below', 'rises_above'])
+      .optional()
+      .describe('type=price uses lt/gt/changes (lt = below threshold, gt = above, changes = any change). type=status uses becomes/changes (becomes = transitions to a specific value; changes = any transition). type=leaderboard_rank uses drops_below/rises_above/changes (rank 1 = best; drops_below: was rank<=N now rank>N; rises_above: was rank>=N now rank<N; changes: any rank movement).'),
+    threshold: z.number().optional().describe('type=price (when op is lt or gt) or type=leaderboard_rank (when op is drops_below or rises_above). Integer rank position for leaderboard_rank.'),
+    value: z.enum(['operational', 'degraded', 'down']).optional().describe('type=status only. Required when op is becomes.'),
   },
-  async ({ model, field, op, threshold, callback_url, secret }) => {
-    const body: Record<string, unknown> = {
-      spec: { type: 'price', model, field, op, ...(typeof threshold === 'number' ? { threshold } : {}) },
-      callback_url,
-    };
-    if (secret !== undefined) body.secret = secret;
-    const data = (await fetchJSON('/premium/watches', { method: 'POST', body, auth: true })) as {
-      watch: { id: string; expires_at: string };
-      billing?: { credits_remaining?: number };
-    };
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: `Created watch ${data.watch.id} (expires ${data.watch.expires_at}). Credits remaining: ${data.billing?.credits_remaining ?? '?'}`,
-        },
-      ],
-    };
-  },
-  CREATE_TOOL,
-);
-
-// ── Tool: create_status_watch (1 credit) ────────────────────────────
-
-registerTool(
-  'create_status_watch',
-  'Register a webhook watch on a service status transition (e.g. anthropic becomes down). Costs 1 credit ($0.02). Watch lives 90 days.',
-  {
-    provider: z.string().describe('Provider name (e.g. anthropic, openai)'),
-    op: z.enum(['becomes', 'changes']).describe('becomes = transitions to a specific value; changes = any transition'),
-    value: z.enum(['operational', 'degraded', 'down']).optional().describe('Required when op is becomes'),
-    callback_url: z.string().describe('HTTPS URL to POST to when the watch fires'),
-    secret: z.string().optional().describe('Optional HMAC shared secret'),
-  },
-  async ({ provider, op, value, callback_url, secret }) => {
-    const body: Record<string, unknown> = {
-      spec: { type: 'status', provider, op, ...(value ? { value } : {}) },
-      callback_url,
-    };
-    if (secret !== undefined) body.secret = secret;
-    const data = (await fetchJSON('/premium/watches', { method: 'POST', body, auth: true })) as {
-      watch: { id: string; expires_at: string };
-      billing?: { credits_remaining?: number };
-    };
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: `Created watch ${data.watch.id} (expires ${data.watch.expires_at}). Credits remaining: ${data.billing?.credits_remaining ?? '?'}`,
-        },
-      ],
-    };
-  },
-  CREATE_TOOL,
-);
-
-// ── Tool: create_digest_watch (1 credit) ────────────────────────────
-
-registerTool(
-  'create_digest_watch',
-  'Register a scheduled digest webhook that fires daily or weekly with a curated summary of pricing changes (regardless of whether anything dramatic happened). Costs 1 credit ($0.02). Watch lives 90 days. Set-and-forget for agents that want a periodic snapshot without subscribing to realtime transitions.',
-  {
-    cadence: z.enum(['daily', 'weekly']).describe('How often the digest fires'),
-    callback_url: z.string().describe('HTTPS URL to POST to when the digest fires'),
-    secret: z.string().optional().describe('Optional HMAC shared secret'),
-  },
-  async ({ cadence, callback_url, secret }) => {
-    const body: Record<string, unknown> = {
-      spec: { type: 'digest', cadence },
-      callback_url,
-    };
-    if (secret !== undefined) body.secret = secret;
-    const data = (await fetchJSON('/premium/watches', { method: 'POST', body, auth: true })) as {
-      watch: { id: string; expires_at: string };
-      billing?: { credits_remaining?: number };
-    };
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: `Created ${cadence} digest watch ${data.watch.id} (expires ${data.watch.expires_at}). First fire at the next 7am UTC daily cron. Credits remaining: ${data.billing?.credits_remaining ?? '?'}`,
-        },
-      ],
-    };
-  },
-  CREATE_TOOL,
-);
-
-// ── Tool: create_leaderboard_rank_watch (1 credit) ──────────────────
-
-registerTool(
-  'create_leaderboard_rank_watch',
-  'Register a webhook that fires when a provider crosses a rank threshold on the cross-provider 7-day uptime leaderboard. Rank 1 = best (highest uptime). drops_below: was rank<=N, now rank>N (got worse). rises_above: was rank>=N, now rank<N (got better). changes: any rank movement. Costs 1 credit ($0.02) at registration. Watch lives 90 days.',
-  {
-    provider: z.string().describe('Provider name or slug (case-insensitive). e.g. claude, openai, gemini, bedrock, azure'),
-    op: z.enum(['drops_below', 'rises_above', 'changes']).describe('Trigger condition'),
-    threshold: z.number().int().min(1).optional().describe('Required for drops_below / rises_above. Integer rank position.'),
-    callback_url: z.string().describe('HTTPS URL to POST to when the watch fires'),
-    secret: z.string().optional().describe('Optional HMAC shared secret'),
-  },
-  async ({ provider, op, threshold, callback_url, secret }) => {
-    const spec: Record<string, unknown> = { type: 'leaderboard_rank', provider, op };
-    if (threshold !== undefined) spec.threshold = threshold;
-    const body: Record<string, unknown> = { spec, callback_url };
-    if (secret !== undefined) body.secret = secret;
-    const data = (await fetchJSON('/premium/watches', { method: 'POST', body, auth: true })) as {
-      watch: { id: string; expires_at: string };
-      billing?: { credits_remaining?: number };
-    };
-    const desc =
-      op === 'changes'
-        ? `${provider} rank changes`
-        : `${provider} ${op.replace('_', ' ')} #${threshold}`;
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: `Created leaderboard rank watch ${data.watch.id} (${desc}). Expires ${data.watch.expires_at}. Credits remaining: ${data.billing?.credits_remaining ?? '?'}`,
-        },
-      ],
-    };
+  async (args) => {
+    const { type, callback_url, secret, model, field, op, threshold, cadence, provider, value } = args;
+    // The merged schema makes every type-specific field optional (each is
+    // required for only one type). Guard the required fields per type here so a
+    // missing one fails with a clear message instead of an opaque 4xx from the
+    // paid /premium/watches endpoint (which would otherwise burn a request).
+    const missingFields: string[] = [];
+    if (type === 'price') {
+      if (!model) missingFields.push('model');
+      if (!field) missingFields.push('field');
+      if (!op) missingFields.push('op');
+    } else if (type === 'status') {
+      if (!provider) missingFields.push('provider');
+      if (!op) missingFields.push('op');
+    } else if (type === 'digest') {
+      if (!cadence) missingFields.push('cadence');
+    } else if (type === 'leaderboard_rank') {
+      if (!provider) missingFields.push('provider');
+      if (!op) missingFields.push('op');
+    }
+    if (missingFields.length > 0) {
+      return { content: [{ type: 'text' as const, text: `type=${type} requires: ${missingFields.join(', ')}.` }] };
+    }
+    switch (type) {
+      case 'price': {
+        const body: Record<string, unknown> = {
+          spec: { type: 'price', model, field, op, ...(typeof threshold === 'number' ? { threshold } : {}) },
+          callback_url,
+        };
+        if (secret !== undefined) body.secret = secret;
+        const data = (await fetchJSON('/premium/watches', { method: 'POST', body, auth: true })) as {
+          watch: { id: string; expires_at: string };
+          billing?: { credits_remaining?: number };
+        };
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `Created watch ${data.watch.id} (expires ${data.watch.expires_at}). Credits remaining: ${data.billing?.credits_remaining ?? '?'}`,
+            },
+          ],
+        };
+      }
+      case 'status': {
+        const body: Record<string, unknown> = {
+          spec: { type: 'status', provider, op, ...(value ? { value } : {}) },
+          callback_url,
+        };
+        if (secret !== undefined) body.secret = secret;
+        const data = (await fetchJSON('/premium/watches', { method: 'POST', body, auth: true })) as {
+          watch: { id: string; expires_at: string };
+          billing?: { credits_remaining?: number };
+        };
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `Created watch ${data.watch.id} (expires ${data.watch.expires_at}). Credits remaining: ${data.billing?.credits_remaining ?? '?'}`,
+            },
+          ],
+        };
+      }
+      case 'digest': {
+        const body: Record<string, unknown> = {
+          spec: { type: 'digest', cadence },
+          callback_url,
+        };
+        if (secret !== undefined) body.secret = secret;
+        const data = (await fetchJSON('/premium/watches', { method: 'POST', body, auth: true })) as {
+          watch: { id: string; expires_at: string };
+          billing?: { credits_remaining?: number };
+        };
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `Created ${cadence} digest watch ${data.watch.id} (expires ${data.watch.expires_at}). First fire at the next 7am UTC daily cron. Credits remaining: ${data.billing?.credits_remaining ?? '?'}`,
+            },
+          ],
+        };
+      }
+      case 'leaderboard_rank': {
+        const spec: Record<string, unknown> = { type: 'leaderboard_rank', provider, op };
+        if (threshold !== undefined) spec.threshold = threshold;
+        const body: Record<string, unknown> = { spec, callback_url };
+        if (secret !== undefined) body.secret = secret;
+        const data = (await fetchJSON('/premium/watches', { method: 'POST', body, auth: true })) as {
+          watch: { id: string; expires_at: string };
+          billing?: { credits_remaining?: number };
+        };
+        const desc =
+          op === 'changes'
+            ? `${provider} rank changes`
+            : `${provider} ${(op ?? '').replace('_', ' ')} #${threshold}`;
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `Created leaderboard rank watch ${data.watch.id} (${desc}). Expires ${data.watch.expires_at}. Credits remaining: ${data.billing?.credits_remaining ?? '?'}`,
+            },
+          ],
+        };
+      }
+    }
   },
   CREATE_TOOL,
 );
@@ -2724,1246 +1903,13 @@ registerTool(
       .string()
       .regex(/^[A-Za-z0-9_-]+$/, 'watch_id may only contain letters, digits, underscores, and hyphens')
       .max(128)
-      .describe('The wat_... id from create_price_watch / create_status_watch / list_watches'),
+      .describe('The wat_... id from create_watch / list_watches'),
   },
   async ({ watch_id }) => {
     await fetchJSON(`/premium/watches/${encodeURIComponent(watch_id)}`, { method: 'DELETE', auth: true });
     return { content: [{ type: 'text' as const, text: `Deleted watch ${watch_id}.` }] };
   },
   DELETE_TOOL,
-);
-
-// ── Tool: probe_latest (free) ───────────────────────────────────────
-
-registerTool(
-  'probe_latest',
-  'Last 24 hours of measured LLM endpoint latency and availability per provider (Anthropic, OpenAI, Google, Mistral, Cohere). TensorFeed pings each provider\'s chat completion endpoint every 15 min and records time-to-first-byte, total response time, and HTTP status. Returns per-provider success rate and ttfb/total p50/p95/p99 latency. The data is unique because we measure it ourselves, not self-reported by the providers. Useful when an agent needs to pick a provider whose SLA you can verify, or to detect ongoing incidents before they hit a status page. Free, no auth.',
-  {},
-  async () => {
-    const data = (await fetchJSON('/probe/latest')) as {
-      summary: {
-        computed_at: string;
-        window_label: string;
-        providers: Array<{
-          provider: string;
-          count: number;
-          ok_pct: number;
-          ttfb: { p50: number | null; p95: number | null; p99: number | null };
-          total: { p50: number | null; p95: number | null; p99: number | null };
-          last_probe_at: string | null;
-          last_error: string | null;
-        }>;
-      };
-    };
-    const s = data.summary;
-    if (s.providers.length === 0) {
-      return { content: [{ type: 'text' as const, text: 'No probe data yet. Probing starts as soon as TensorFeed has at least one provider key configured.' }] };
-    }
-    const rows = s.providers
-      .sort((a, b) => b.ok_pct - a.ok_pct)
-      .map(p => {
-        const okPct = (p.ok_pct * 100).toFixed(1);
-        const ttfb = p.ttfb.p50 !== null ? `p50 ${p.ttfb.p50}ms / p95 ${p.ttfb.p95}ms / p99 ${p.ttfb.p99}ms` : 'no successful probes';
-        const total = p.total.p50 !== null ? `p50 ${p.total.p50}ms / p95 ${p.total.p95}ms / p99 ${p.total.p99}ms` : 'no successful probes';
-        const err = p.last_error ? `\n      last error: ${p.last_error}` : '';
-        return `  ${p.provider}: ${okPct}% ok over ${p.count} probes\n    ttfb:  ${ttfb}\n    total: ${total}${err}`;
-      })
-      .join('\n\n');
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: `LLM Endpoint SLA (${s.window_label}, computed ${s.computed_at})\n\n${rows}\n\nSource: TensorFeed measured probes, not self-reported.`,
-        },
-      ],
-    };
-  },
-);
-
-// ── Tool: probe_series (1 credit) ───────────────────────────────────
-
-registerTool(
-  'probe_series',
-  'Daily SLA series for one LLM provider, measured by TensorFeed. Returns per-day count, success rate, ttfb p50/p95/p99, total p50/p95/p99, and incident-hour count across the requested window. Provider status pages are politically managed; this is the measured truth. Pairs naturally with premium_routing for picking a model whose SLA you can verify. Costs 3 credits ($0.06). Strict premium, no free trial.',
-  {
-    provider: z.enum(['anthropic', 'openai', 'google', 'mistral', 'cohere']).describe('LLM provider key'),
-    from: z.string().optional().describe('Inclusive start YYYY-MM-DD (default: 30 days before to)'),
-    to: z.string().optional().describe('Inclusive end YYYY-MM-DD (default: today UTC)'),
-  },
-  async ({ provider, from, to }) => {
-    const params = new URLSearchParams();
-    params.set('provider', provider);
-    if (from) params.set('from', from);
-    if (to) params.set('to', to);
-    const data = (await fetchJSON(`/premium/probe/series?${params}`, { auth: true })) as {
-      provider: string;
-      from: string;
-      to: string;
-      days: number;
-      points: Array<{
-        date: string;
-        ok_pct: number | null;
-        ttfb_p50: number | null;
-        ttfb_p95: number | null;
-        total_p50: number | null;
-        total_p95: number | null;
-        incident_hours: number;
-        has_data: boolean;
-      }>;
-      summary: { overall_uptime_pct: number | null; days_with_data: number; days_with_incidents: number };
-      notes: string[];
-      billing?: { credits_remaining?: number };
-    };
-    const lines = data.points
-      .map(p => p.has_data
-        ? `  ${p.date}  ${(p.ok_pct! * 100).toFixed(1)}% ok  ttfb p50/p95: ${p.ttfb_p50}/${p.ttfb_p95}ms  total p50/p95: ${p.total_p50}/${p.total_p95}ms  incidents: ${p.incident_hours}h`
-        : `  ${p.date}  (no data)`,
-      )
-      .join('\n');
-    const overall = data.summary.overall_uptime_pct !== null
-      ? `${(data.summary.overall_uptime_pct * 100).toFixed(2)}%`
-      : 'insufficient data';
-    const notes = data.notes.length ? '\nNotes: ' + data.notes.join('; ') : '';
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: `${data.provider} measured SLA, ${data.from} -> ${data.to}\nOverall uptime: ${overall}  (${data.summary.days_with_data} days with data, ${data.summary.days_with_incidents} with incidents)\n\n${lines}${notes}\n\nCredits remaining: ${data.billing?.credits_remaining ?? '?'}`,
-        },
-      ],
-    };
-  },
-);
-
-// ── Tool: mcp_registry_snapshot (free) ──────────────────────────────
-
-registerTool(
-  'mcp_registry_snapshot',
-  'Today\'s summary of the official Model Context Protocol server registry. Returns total servers, by-status breakdown, top namespaces, and 1-day deltas (newly added, reactivated, deprecated). Captured daily at 9:30 AM UTC from registry.modelcontextprotocol.io. Useful when an agent wants to see how the MCP ecosystem is growing or detect freshly-deprecated servers it may be using. Free, no auth.',
-  {},
-  async () => {
-    const data = (await fetchJSON('/mcp/registry/snapshot')) as {
-      summary: {
-        date: string;
-        capturedAt: string;
-        total_servers: number;
-        total_versions: number;
-        by_status: Record<string, number>;
-        top_namespaces: { namespace: string; count: number }[];
-        new_today: { count: number; names: string[] };
-        reactivated_today: { count: number; names: string[] };
-        deprecated_today: { count: number; names: string[] };
-        delta_vs_yesterday: { added: number; removed: number; net: number } | null;
-      };
-    };
-    const s = data.summary;
-    const statusLine = Object.entries(s.by_status)
-      .map(([k, v]) => `${k}: ${v}`)
-      .join(', ');
-    const topNs = s.top_namespaces.slice(0, 10).map(n => `  ${n.namespace}: ${n.count}`).join('\n');
-    const delta = s.delta_vs_yesterday
-      ? `Day over day: +${s.delta_vs_yesterday.added} new, -${s.delta_vs_yesterday.removed} removed, net ${s.delta_vs_yesterday.net >= 0 ? '+' : ''}${s.delta_vs_yesterday.net}`
-      : 'Day over day: not available (first snapshot)';
-    const newToday = s.new_today.count > 0
-      ? `\nNewly listed today (${s.new_today.count}):\n` + s.new_today.names.slice(0, 10).map(n => `  ${n}`).join('\n')
-      : '';
-    const deprecatedToday = s.deprecated_today.count > 0
-      ? `\nDeprecated today (${s.deprecated_today.count}):\n` + s.deprecated_today.names.slice(0, 10).map(n => `  ${n}`).join('\n')
-      : '';
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text:
-            `MCP Server Registry, ${s.date}\n` +
-            `Total servers: ${s.total_servers} (across ${s.total_versions} versioned entries)\n` +
-            `Status: ${statusLine}\n${delta}\n\n` +
-            `Top namespaces:\n${topNs}` +
-            newToday + deprecatedToday +
-            `\n\nSource: registry.modelcontextprotocol.io`,
-        },
-      ],
-    };
-  },
-);
-
-// ── Tool: get_ai_papers_trending (free) ─────────────────────────────
-
-registerTool(
-  'get_ai_papers_trending',
-  'Daily curated AI/ML research papers ranked by citation count. Sourced from Semantic Scholar across five fan-out queries (large language model, transformer, RLHF, AI agents, diffusion model), deduped by paperId, top 30 returned. Each paper carries title, abstract, authors, year, venue, citation count, arxivId, doi, and fields of study. Refreshed daily at 11:00 UTC. Use this when an agent wants the citation-ranked top of the AI research literature. Free, no auth.',
-  {},
-  async () => {
-    const data = (await fetchJSON('/papers/ai-trending')) as {
-      snapshot: {
-        date: string;
-        capturedAt: string;
-        total_papers: number;
-        papers: { title: string; year: number | null; venue: string | null; citationCount: number; authors: string[]; arxivId: string | null; url: string | null }[];
-        summary: { top_venues: { venue: string; count: number }[] };
-      };
-    };
-    const s = data.snapshot;
-    const lines = s.papers.map((p, i) => {
-      const authors = p.authors.slice(0, 3).join(', ') + (p.authors.length > 3 ? ' et al.' : '');
-      const year = p.year ? ` (${p.year})` : '';
-      const venue = p.venue ? ` ${p.venue}.` : '';
-      const arxiv = p.arxivId ? ` arXiv:${p.arxivId}` : '';
-      const link = p.url ? `\n     ${p.url}` : '';
-      return `${i + 1}. ${p.title}${year}\n     ${authors}.${venue} Citations: ${p.citationCount}.${arxiv}${link}`;
-    }).join('\n\n');
-    const venues = s.summary.top_venues.slice(0, 5).map(v => `${v.venue} (${v.count})`).join(', ');
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text:
-            `AI Papers, citation-ranked. ${s.date}, ${s.total_papers} papers.\n` +
-            (venues ? `Top venues: ${venues}\n\n` : '\n') +
-            lines +
-            `\n\nSource: Semantic Scholar Graph API. Captured ${s.capturedAt}.`,
-        },
-      ],
-    };
-  },
-);
-
-// ── Tool: get_arxiv_recent (free) ───────────────────────────────────
-
-registerTool(
-  'get_arxiv_recent',
-  'Most recent arXiv submissions in cs.AI / cs.LG / cs.CL / cs.CV. Single Atom API call, deduped by arxivId, top 50 by submission date. The firehose pair to get_ai_papers_trending: this shows what just dropped, ai_papers_trending ranks by citation count. Each paper carries arxivId, title, abstract, authors, primary category, publication date, html and pdf URLs. Refreshed daily at 11:30 UTC. Free, no auth.',
-  {
-    limit: z.number().min(1).max(50).optional().describe('Max papers to include in the rendered list (default 25, max 50)'),
-  },
-  async ({ limit }) => {
-    const data = (await fetchJSON('/papers/arxiv-recent')) as {
-      snapshot: {
-        date: string;
-        capturedAt: string;
-        total_papers: number;
-        categories_queried: string[];
-        papers: { arxivId: string; title: string; authors: string[]; primaryCategory: string | null; publishedAt: string; htmlUrl: string }[];
-      };
-    };
-    const s = data.snapshot;
-    const cap = Math.min(limit ?? 25, s.papers.length);
-    const lines = s.papers.slice(0, cap).map((p, i) => {
-      const authors = p.authors.slice(0, 3).join(', ') + (p.authors.length > 3 ? ' et al.' : '');
-      const cat = p.primaryCategory ? ` [${p.primaryCategory}]` : '';
-      const date = p.publishedAt ? ` ${p.publishedAt.slice(0, 10)}` : '';
-      return `${i + 1}. ${p.title}${cat}${date}\n     ${authors}\n     ${p.htmlUrl}`;
-    }).join('\n\n');
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text:
-            `arXiv recent submissions. ${s.date}, showing ${cap} of ${s.total_papers}.\n` +
-            `Categories: ${s.categories_queried.join(', ')}\n\n` +
-            lines +
-            `\n\nSource: arxiv.org. Captured ${s.capturedAt}.`,
-        },
-      ],
-    };
-  },
-);
-
-// ── Tool: get_hf_trending (free) ────────────────────────────────────
-
-registerTool(
-  'get_hf_trending',
-  'Top Hugging Face models, datasets, and Spaces. Models + datasets ranked by downloads (top 30 each); Spaces ranked by likes (top 30, since downloads is meaningless for hosted apps). Captured daily at 12:00 UTC against the public HF API (no auth). Each model entry carries id, downloads, likes, pipeline_tag, tags, lastModified, private, gated. Each space entry carries id, author, sdk (gradio/streamlit/static/docker), likes, tags, lastModified, private, runtime_stage, hardware. Use this when an agent wants the current shape of the open model + dataset + app ecosystem. Once enough daily snapshots accumulate, day-over-day deltas become a real trending signal. Free, no auth.',
-  {
-    section: z.enum(['models', 'datasets', 'spaces', 'all', 'both']).optional().describe('Which to include in the rendered output (default all). "both" is accepted as alias for "models+datasets" for backward compat.'),
-    limit: z.number().min(1).max(30).optional().describe('Max items per section (default 15, max 30)'),
-  },
-  async ({ section, limit }) => {
-    const data = (await fetchJSON('/hf/trending')) as {
-      snapshot: {
-        date: string;
-        capturedAt: string;
-        models: { items: { id: string; downloads: number; likes: number; pipeline_tag: string | null }[] };
-        datasets: { items: { id: string; downloads: number; likes: number }[] };
-        spaces: { items: { id: string; sdk: string | null; likes: number; runtime_stage: string | null; hardware: string | null }[] };
-        summary: { top_pipeline_tags: { tag: string; count: number }[]; top_namespaces: { namespace: string; count: number }[]; top_space_sdks: { sdk: string; count: number }[] };
-      };
-    };
-    const s = data.snapshot;
-    const sec = section ?? 'all';
-    const n = Math.min(limit ?? 15, 30);
-    const fmtCount = (x: number) => x >= 1_000_000 ? `${(x / 1_000_000).toFixed(1)}M` : x >= 1_000 ? `${(x / 1_000).toFixed(1)}K` : String(x);
-
-    const modelLines = s.models.items.slice(0, n).map((m, i) => {
-      const tag = m.pipeline_tag ? ` [${m.pipeline_tag}]` : '';
-      return `${i + 1}. ${m.id}${tag}  ${fmtCount(m.downloads)} downloads, ${fmtCount(m.likes)} likes`;
-    }).join('\n');
-    const datasetLines = s.datasets.items.slice(0, n).map((d, i) =>
-      `${i + 1}. ${d.id}  ${fmtCount(d.downloads)} downloads, ${fmtCount(d.likes)} likes`,
-    ).join('\n');
-    const spaceLines = (s.spaces?.items ?? []).slice(0, n).map((sp, i) => {
-      const sdk = sp.sdk ? ` [${sp.sdk}]` : '';
-      const hw = sp.hardware ? `, hw: ${sp.hardware}` : '';
-      const stage = sp.runtime_stage ? `, ${sp.runtime_stage.toLowerCase()}` : '';
-      return `${i + 1}. ${sp.id}${sdk}  ${fmtCount(sp.likes)} likes${stage}${hw}`;
-    }).join('\n');
-
-    const pipelines = s.summary.top_pipeline_tags.slice(0, 5).map(t => `${t.tag} (${t.count})`).join(', ');
-    const namespaces = s.summary.top_namespaces.slice(0, 5).map(n => `${n.namespace} (${n.count})`).join(', ');
-    const sdks = (s.summary.top_space_sdks ?? []).slice(0, 5).map(t => `${t.sdk} (${t.count})`).join(', ');
-
-    let text = `Hugging Face top assets. ${s.date}.\n`;
-    if (pipelines) text += `Top pipeline tags (models): ${pipelines}\n`;
-    if (sdks) text += `Top Space SDKs: ${sdks}\n`;
-    if (namespaces) text += `Top namespaces: ${namespaces}\n`;
-    const includeModels = sec === 'models' || sec === 'all' || sec === 'both';
-    const includeDatasets = sec === 'datasets' || sec === 'all' || sec === 'both';
-    const includeSpaces = sec === 'spaces' || sec === 'all';
-    if (includeModels) text += `\nModels (by downloads):\n${modelLines}\n`;
-    if (includeDatasets) text += `\nDatasets (by downloads):\n${datasetLines}\n`;
-    if (includeSpaces) text += `\nSpaces (by likes):\n${spaceLines || '  (none returned)'}\n`;
-    text += `\nSource: huggingface.co. Captured ${s.capturedAt}.`;
-    return { content: [{ type: 'text' as const, text }] };
-  },
-);
-
-// ── Tool: get_hot_issues (free) ─────────────────────────────────────
-
-registerTool(
-  'get_hot_issues',
-  'Currently-hot GitHub issues across the AI ecosystem. Five fan-out keyword-phrase searches ("large language model", "AI agent", transformer, "machine learning", LLM) for is:issue is:open archived:false comments>=10 updated within the last 7 days. Deduped by URL, top 30 by comment count. Each issue carries url, repo, number, title, author, state, comments, reactions_total, labels, created_at, updated_at, and matched_topic (the keyword phrase that found it). Refreshed daily at 12:30 UTC. Companion to get_trending_repos: that shows which AI repos are gaining stars, this shows where the active conversations are. Free, no auth.',
-  {
-    limit: z.number().min(1).max(30).optional().describe('Max issues to render (default 15, max 30)'),
-  },
-  async ({ limit }) => {
-    const data = (await fetchJSON('/issues/hot')) as {
-      snapshot: {
-        date: string;
-        capturedAt: string;
-        total_issues: number;
-        topics_queried: string[];
-        recent_window_days: number;
-        comments_threshold: number;
-        issues: { url: string; repo: string; title: string; author: string | null; state: 'open' | 'closed'; comments: number; reactions_total: number; matched_topic: string; updated_at: string }[];
-        summary: { by_topic: Record<string, number>; top_repos: { repo: string; count: number }[] };
-      };
-    };
-    const s = data.snapshot;
-    const cap = Math.min(limit ?? 15, s.issues.length);
-    const lines = s.issues.slice(0, cap).map((i, n) => {
-      const meta = `${i.comments} comments, ${i.reactions_total} reactions  [${i.matched_topic}]`;
-      const author = i.author ? ` by ${i.author}` : '';
-      const updated = i.updated_at ? `  updated ${i.updated_at.slice(0, 10)}` : '';
-      return `${n + 1}. ${i.repo}: ${i.title}\n     ${meta}${updated}${author}\n     ${i.url}`;
-    }).join('\n\n');
-    const repos = s.summary.top_repos.slice(0, 5).map(r => `${r.repo} (${r.count})`).join(', ');
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text:
-            `Hot AI GitHub issues. ${s.date}, showing ${cap} of ${s.total_issues}.\n` +
-            `Window: last ${s.recent_window_days} days, comments threshold ${s.comments_threshold}.\n` +
-            (repos ? `Most-active repos: ${repos}\n\n` : '\n') +
-            lines +
-            `\n\nSource: GitHub Search API. Captured ${s.capturedAt}.`,
-        },
-      ],
-    };
-  },
-);
-
-// ── Tool: get_reddit_trending (free) ────────────────────────────────
-
-registerTool(
-  'get_reddit_trending',
-  'Currently-hot threads in 7 AI-relevant subreddits (LocalLLaMA, MachineLearning, ClaudeAI, OpenAI, singularity, artificial, AI_Agents). Stickied and NSFW posts filtered, deduped by post id, ranked by score, top 30. Each post carries id, subreddit, title, author, score, upvote_ratio, num_comments, permalink, url, created_utc, flair, is_self, is_video. Refreshed daily at 13:00 UTC. Companion to get_hot_issues: that surfaces developer conversation on GitHub, this surfaces community conversation on Reddit. Titles are sanitized at capture time against prompt-injection tokens. Free, no auth.',
-  {
-    subreddit: z.string().optional().describe('Optional filter to a single subreddit name (e.g. "LocalLLaMA"). Case-insensitive. If absent, returns posts from all 7.'),
-    limit: z.number().min(1).max(30).optional().describe('Max posts to render (default 15, max 30)'),
-  },
-  async ({ subreddit, limit }) => {
-    const data = (await fetchJSON('/reddit/trending')) as {
-      snapshot: {
-        date: string;
-        capturedAt: string;
-        total_posts: number;
-        subreddits_queried: string[];
-        posts: { subreddit: string; title: string; author: string | null; score: number; num_comments: number; permalink: string; flair: string | null }[];
-        summary: { by_subreddit: Record<string, number>; top_authors: { author: string; count: number }[] };
-      };
-    };
-    const s = data.snapshot;
-    const subFilter = subreddit?.trim().toLowerCase();
-    const filtered = subFilter
-      ? s.posts.filter(p => p.subreddit.toLowerCase() === subFilter)
-      : s.posts;
-    const cap = Math.min(limit ?? 15, filtered.length);
-    const fmtCount = (x: number) => x >= 1_000 ? `${(x / 1_000).toFixed(1)}K` : String(x);
-    const lines = filtered.slice(0, cap).map((p, i) => {
-      const author = p.author ? ` by ${p.author}` : '';
-      const flair = p.flair ? ` [${p.flair}]` : '';
-      return `${i + 1}. r/${p.subreddit}: ${p.title}${flair}\n     ${fmtCount(p.score)} pts, ${fmtCount(p.num_comments)} comments${author}\n     ${p.permalink}`;
-    }).join('\n\n');
-    const subs = Object.entries(s.summary.by_subreddit)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 5)
-      .map(([sub, n]) => `r/${sub} (${n})`)
-      .join(', ');
-    let text = `Hot AI Reddit threads. ${s.date}, showing ${cap} of ${filtered.length}`;
-    if (subFilter) text += ` (filtered to r/${subreddit})`;
-    text += '.\n';
-    if (subs && !subFilter) text += `Most-active subreddits: ${subs}\n`;
-    text += '\n' + (lines || '  (no posts)');
-    text += `\n\nSource: reddit.com. Captured ${s.capturedAt}.`;
-    return { content: [{ type: 'text' as const, text }] };
-  },
-);
-
-// ── Tool: get_openrouter_models (free) ──────────────────────────────
-
-registerTool(
-  'get_openrouter_models',
-  'OpenRouter cross-provider model catalog (200+ models normalized across 50+ inference providers). Each entry has per-token pricing (prompt + completion + image + request), context window, modality (e.g. text+image->text), instruct_type, tokenizer, top provider metadata (max_completion_tokens, moderation flag), and supported_parameters. Use this to find the long tail of OSS models on cloud inference, including the cheapest model for a given workload, the model with the largest context window, or the free-tier set. Pairs with get_model_pricing (curated frontier-lab catalog). Refreshed daily at 14:00 UTC. Free, no auth.',
-  {
-    namespace: z.string().optional().describe('Optional filter to a single provider namespace (e.g. "anthropic", "openai", "meta-llama"). Case-insensitive.'),
-    free_only: z.boolean().optional().describe('If true, return only models with prompt+completion both 0 (free-tier).'),
-    cheapest: z.boolean().optional().describe('If true, sort by cheapest input price ascending. Free-tier models excluded from this sort.'),
-    limit: z.number().min(1).max(50).optional().describe('Max models to render (default 20, max 50)'),
-  },
-  async ({ namespace, free_only, cheapest, limit }) => {
-    const data = (await fetchJSON('/openrouter/models')) as {
-      snapshot: {
-        date: string;
-        capturedAt: string;
-        total_models: number;
-        models: { id: string; name: string; context_length: number | null; modality: string | null; pricing: { prompt: number | null; completion: number | null; image: number | null; request: number | null } }[];
-        summary: { by_namespace: { namespace: string; count: number }[]; cheapest_input: { id: string; usd_per_million: number } | null; cheapest_output: { id: string; usd_per_million: number } | null; largest_context: { id: string; tokens: number } | null; free_tier_count: number };
-      };
-    };
-    const s = data.snapshot;
-    const ns = namespace?.trim().toLowerCase();
-    let list = s.models;
-    if (ns) list = list.filter(m => m.id.toLowerCase().startsWith(ns + '/'));
-    if (free_only) list = list.filter(m => m.pricing.prompt === 0 && m.pricing.completion === 0);
-    if (cheapest) {
-      list = list
-        .filter(m => typeof m.pricing.prompt === 'number' && m.pricing.prompt > 0)
-        .sort((a, b) => (a.pricing.prompt ?? 0) - (b.pricing.prompt ?? 0));
-    }
-
-    const cap = Math.min(limit ?? 20, list.length);
-    const fmtPrice = (p: number | null) =>
-      p === null ? '?' : p === 0 ? 'free' : `$${(p * 1_000_000).toFixed(2)}/Mtok`;
-    const fmtCtx = (c: number | null) =>
-      c === null ? 'unknown' : c >= 1_000_000 ? `${(c / 1_000_000).toFixed(0)}M` : `${(c / 1_000).toFixed(0)}K`;
-
-    const lines = list.slice(0, cap).map((m, i) => {
-      const modality = m.modality ? ` ${m.modality}` : '';
-      return `${i + 1}. ${m.id}${modality}\n     in ${fmtPrice(m.pricing.prompt)}, out ${fmtPrice(m.pricing.completion)}, ctx ${fmtCtx(m.context_length)}`;
-    }).join('\n\n');
-
-    const namespaces = s.summary.by_namespace.slice(0, 5).map(n => `${n.namespace} (${n.count})`).join(', ');
-    let header = `OpenRouter catalog. ${s.date}. ${s.total_models} models total, ${list.length} after filters, showing ${cap}.\n`;
-    header += `Top provider namespaces: ${namespaces}\n`;
-    if (s.summary.cheapest_input) header += `Cheapest input (paid): ${s.summary.cheapest_input.id} at $${s.summary.cheapest_input.usd_per_million.toFixed(2)}/Mtok\n`;
-    if (s.summary.largest_context) header += `Largest context: ${s.summary.largest_context.id} at ${fmtCtx(s.summary.largest_context.tokens)} tokens\n`;
-    header += `Free-tier models available: ${s.summary.free_tier_count}\n`;
-
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: header + '\n' + (lines || '  (no models match the filters)') + `\n\nSource: openrouter.ai. Captured ${s.capturedAt}.`,
-        },
-      ],
-    };
-  },
-);
-
-// ── Tool: get_hf_daily_papers (free) ────────────────────────────────
-
-registerTool(
-  'get_hf_daily_papers',
-  'Hugging Face Daily Papers: editor-curated AI/ML papers from huggingface.co/papers, layered with community upvotes and discussion counts. Different signal from get_arxiv_recent (firehose) and get_ai_papers_trending (citation-ranked all-time): this is editor picks of-the-day with engagement signal. Each paper carries paperId, title, summary, authors, upvotes, num_comments, hf_url, arxiv_url (when applicable), github_repo, github_stars, ai_keywords. Refreshed daily at 14:15 UTC. Titles sanitized at capture time. Free, no auth.',
-  {
-    limit: z.number().min(1).max(30).optional().describe('Max papers to render (default 15, max 30)'),
-  },
-  async ({ limit }) => {
-    const data = (await fetchJSON('/papers/hf-daily')) as {
-      snapshot: {
-        date: string;
-        capturedAt: string;
-        total_papers: number;
-        papers: { paperId: string; title: string; authors: string[]; upvotes: number; num_comments: number; hf_url: string; arxiv_url: string | null; ai_keywords: string[] }[];
-        summary: { by_keyword: { keyword: string; count: number }[]; most_upvoted: { paperId: string; title: string; upvotes: number } | null };
-      };
-    };
-    const s = data.snapshot;
-    const cap = Math.min(limit ?? 15, s.papers.length);
-    const lines = s.papers.slice(0, cap).map((p, i) => {
-      const authors = p.authors.slice(0, 3).join(', ') + (p.authors.length > 3 ? ' et al.' : '');
-      const kw = p.ai_keywords.length > 0 ? `\n     keywords: ${p.ai_keywords.slice(0, 5).join(', ')}` : '';
-      const arxiv = p.arxiv_url ? `\n     arxiv: ${p.arxiv_url}` : '';
-      return `${i + 1}. ${p.title}\n     ${authors}\n     ${p.upvotes} upvotes, ${p.num_comments} comments\n     ${p.hf_url}${arxiv}${kw}`;
-    }).join('\n\n');
-    const kw = s.summary.by_keyword.slice(0, 5).map(k => `${k.keyword} (${k.count})`).join(', ');
-    let text = `HF Daily Papers (editor-curated). ${s.date}, showing ${cap} of ${s.total_papers}.\n`;
-    if (kw) text += `Top keywords: ${kw}\n`;
-    if (s.summary.most_upvoted) text += `Most upvoted: "${s.summary.most_upvoted.title}" (${s.summary.most_upvoted.upvotes})\n`;
-    text += '\n' + lines + `\n\nSource: huggingface.co/papers. Captured ${s.capturedAt}.`;
-    return { content: [{ type: 'text' as const, text }] };
-  },
-);
-
-// ── Tool: get_ai_ecosystem_today (free, composite) ──────────────────
-// ── Tool: get_recent_earthquakes (free) ─────────────────────────────
-
-registerTool(
-  'get_recent_earthquakes',
-  "Recent earthquakes from the USGS Earthquake Hazards Program pre-built summary feeds. Choose a magnitude bucket (significant | 4.5 | 2.5 | 1.0 | all) and a time window (hour | day | week | month). Returns id, magnitude, place, time (ISO 8601), depth_km, longitude, latitude, tsunami flag, USGS detail URL. Upstream feeds refresh every minute. License: US Government public domain (17 USC §105). Free, no auth.",
-  {
-    magnitude: z.enum(['significant', '4.5', '2.5', '1.0', 'all']).optional().describe('Magnitude bucket (default 4.5)'),
-    period: z.enum(['hour', 'day', 'week', 'month']).optional().describe('Time window (default day)'),
-    limit: z.number().min(1).max(50).optional().describe('Max earthquakes to render (default 15, max 50). Worker accepts up to 500 but text rendering caps lower.'),
-  },
-  async ({ magnitude, period, limit }) => {
-    const params = new URLSearchParams();
-    params.set('magnitude', magnitude ?? '4.5');
-    params.set('period', period ?? 'day');
-    params.set('limit', String(Math.min(limit ?? 15, 50)));
-    const data = (await fetchJSON(`/climate/earthquakes?${params}`)) as {
-      ok: boolean;
-      query?: { magnitude: string; period: string; limit: number };
-      feed_metadata?: { title: string | null; generated: string | null; upstream_count: number };
-      earthquakes?: { id: string; magnitude: number | null; place: string | null; time: string | null; depth_km: number | null; latitude: number | null; longitude: number | null; tsunami: boolean; url: string | null }[];
-      error?: string;
-    };
-    if (!data.ok || !data.earthquakes) {
-      return { content: [{ type: 'text' as const, text: `USGS earthquakes unavailable: ${data.error ?? 'unknown error'}` }] };
-    }
-    const eqs = data.earthquakes;
-    const lines = eqs.map((q, i) => {
-      const mag = q.magnitude !== null ? `M${q.magnitude.toFixed(1)}` : 'M?';
-      const tsu = q.tsunami ? ' [tsunami flag]' : '';
-      const time = q.time ? q.time.slice(0, 19).replace('T', ' ') + ' UTC' : 'unknown time';
-      const depth = q.depth_km !== null ? `${q.depth_km.toFixed(0)}km deep` : 'depth unknown';
-      const coords = q.latitude !== null && q.longitude !== null ? ` (${q.latitude.toFixed(2)}, ${q.longitude.toFixed(2)})` : '';
-      return `${i + 1}. ${mag}  ${q.place ?? 'location unknown'}${coords}\n     ${time}, ${depth}${tsu}\n     ${q.url ?? ''}`;
-    }).join('\n\n');
-    const meta = data.feed_metadata;
-    const header = `USGS earthquakes (${data.query?.magnitude ?? '?'} / ${data.query?.period ?? '?'}). ${eqs.length} of ${meta?.upstream_count ?? '?'} returned.`;
-    return { content: [{ type: 'text' as const, text: `${header}\n\n${lines || '  (no events in this window)'}\n\nSource: USGS Earthquake Hazards Program. Public domain (17 USC §105).` }] };
-  },
-);
-
-// ── Tool: get_weather_alerts (free, US only) ────────────────────────
-
-registerTool(
-  'get_weather_alerts',
-  "Active US weather alerts from the National Weather Service. US-only. Filter by 2-letter state code (area), exact NWS event name, severity, urgency, status. Returns id, event, severity, urgency, headline, description, areaDesc, sent/effective/expires/ends, sender_name, web URL. Active alerts only. Expired alerts fall off the upstream feed automatically. License: US Government public domain. Free, no auth.",
-  {
-    area: z.string().regex(/^[A-Za-z]{2}$/).optional().describe('2-letter US state or territory code (CA, TX, PR, etc)'),
-    event: z.string().optional().describe('Exact NWS event name (e.g. "Tornado Warning", "Heat Advisory")'),
-    severity: z.enum(['Extreme', 'Severe', 'Moderate', 'Minor', 'Unknown']).optional().describe('Severity filter'),
-    urgency: z.enum(['Immediate', 'Expected', 'Future', 'Past', 'Unknown']).optional().describe('Urgency filter'),
-    status: z.enum(['actual', 'exercise', 'system', 'test', 'draft']).optional().describe('Status filter (default actual unfiltered)'),
-    limit: z.number().min(1).max(50).optional().describe('Max alerts to render (default 15, max 50). Worker accepts up to 500 but text rendering caps lower.'),
-  },
-  async ({ area, event, severity, urgency, status, limit }) => {
-    const params = new URLSearchParams();
-    if (area) params.set('area', area.toUpperCase());
-    if (event) params.set('event', event);
-    if (severity) params.set('severity', severity);
-    if (urgency) params.set('urgency', urgency);
-    if (status) params.set('status', status);
-    params.set('limit', String(Math.min(limit ?? 15, 50)));
-    const data = (await fetchJSON(`/climate/weather-alerts?${params}`)) as {
-      ok: boolean;
-      query?: { area: string | null; event: string | null; severity: string | null; urgency: string | null; status: string | null };
-      feed_metadata?: { title: string | null; updated: string | null; upstream_count: number };
-      alerts?: { id: string; event: string | null; severity: string | null; urgency: string | null; headline: string | null; area_desc: string | null; effective: string | null; expires: string | null; sender_name: string | null; web: string | null }[];
-      error?: string;
-    };
-    if (!data.ok || !data.alerts) {
-      return { content: [{ type: 'text' as const, text: `NWS weather alerts unavailable: ${data.error ?? 'unknown error'}` }] };
-    }
-    const alerts = data.alerts;
-    const lines = alerts.map((a, i) => {
-      const ev = a.event ?? 'unknown event';
-      const sev = a.severity ? `[${a.severity}]` : '';
-      const eff = a.effective ? a.effective.slice(0, 19).replace('T', ' ') + ' UTC' : '';
-      const exp = a.expires ? a.expires.slice(0, 19).replace('T', ' ') + ' UTC' : 'no expiry';
-      return `${i + 1}. ${sev} ${ev}\n     Where: ${a.area_desc ?? 'unspecified'}\n     ${a.headline ?? ''}\n     Effective: ${eff} → ${exp}\n     ${a.web ?? ''}`;
-    }).join('\n\n');
-    const filters: string[] = [];
-    if (area) filters.push(`area=${area.toUpperCase()}`);
-    if (event) filters.push(`event=${event}`);
-    if (severity) filters.push(`severity=${severity}`);
-    const filterText = filters.length > 0 ? ` (${filters.join(', ')})` : '';
-    const header = `NWS active US weather alerts${filterText}. ${alerts.length} of ${data.feed_metadata?.upstream_count ?? '?'} returned.`;
-    return { content: [{ type: 'text' as const, text: `${header}\n\n${lines || '  (no active alerts matching filters)'}\n\nSource: api.weather.gov. Public domain (17 USC §105). US-only coverage.` }] };
-  },
-);
-
-// ── Tool: get_agent_opportunities (free) ────────────────────────────
-
-registerTool(
-  'get_agent_opportunities',
-  "TensorFeed's daily scan of new repositories across the AI agent ecosystem (Anthropic, OpenAI, Microsoft, ModelContextProtocol, HuggingFace, LangChain, frontier-lab orgs) plus recent MCP, x402, and skill keyword sweeps. Eleven signals total, deduped + composite-scored (signal_weight × log10(stars+1) × recency decay) with per-signal MIN/MAX caps so smaller signals are never starved. Refreshed daily at 13:30 UTC. Useful for surfacing distribution targets, integration ideas, or a daily brief on what's launching across the agent space. Free, no auth.",
-  {
-    signal: z.enum([
-      'anthropic-org', 'openai-org', 'microsoft-org', 'mcp-org', 'huggingface-org',
-      'langchain-org', 'frontier-labs', 'mcp-keyword', 'x402-keyword', 'skill-keyword',
-      'vertical-pattern',
-    ]).optional().describe('Filter to one signal source. Omit to get the cross-signal ranked top-N.'),
-    limit: z.number().min(1).max(25).optional().describe('Max opportunities to render (default 10, max 25)'),
-  },
-  async ({ signal, limit }) => {
-    const data = (await fetchJSON('/agents/opportunities')) as {
-      ok?: boolean;
-      date?: string;
-      capturedAt?: string;
-      total_opportunities?: number;
-      summary?: { by_signal?: Record<string, number>; top_orgs?: { org: string; count: number }[] };
-      opportunities?: { full_name: string; html_url: string; description: string | null; stars: number; updated_at: string; signal: string; composite_score: number }[];
-      error?: string;
-    };
-    if (data.error) {
-      return { content: [{ type: 'text' as const, text: `Agent opportunities unavailable: ${data.error}` }] };
-    }
-    const all = data.opportunities ?? [];
-    const filtered = signal ? all.filter(o => o.signal === signal) : all;
-    const cap = Math.min(limit ?? 10, 25);
-    const top = filtered.slice(0, cap);
-    const lines = top.map((o, i) => {
-      const updated = o.updated_at ? o.updated_at.slice(0, 10) : '';
-      const desc = o.description ? `\n     ${o.description.length > 140 ? o.description.slice(0, 140) + '...' : o.description}` : '';
-      return `${i + 1}. [${o.signal}] ${o.full_name}  ${o.stars.toLocaleString()}★, score ${o.composite_score.toFixed(1)}, updated ${updated}${desc}\n     ${o.html_url}`;
-    }).join('\n\n');
-    const filt = signal ? ` filtered to ${signal}` : '';
-    const header = `Agent ecosystem opportunities for ${data.date ?? 'today'}${filt}. ${top.length} of ${filtered.length} (total snapshot: ${data.total_opportunities ?? all.length}).`;
-    const bySignal = data.summary?.by_signal ? Object.entries(data.summary.by_signal).map(([k, v]) => `${k}=${v}`).join(', ') : '';
-    const sig = bySignal ? `\nBy signal: ${bySignal}` : '';
-    return { content: [{ type: 'text' as const, text: `${header}${sig}\n\n${lines || '  (no opportunities returned)'}\n\nSource: TensorFeed daily GitHub scan via the public Search API.` }] };
-  },
-);
-
-// Single fetch to /api/today which fans out worker-side. The previous
-// implementation made 9 separate fetches per agent invocation; now
-// the worker's edge cache absorbs the load and serves one cached
-// response to all concurrent agents. Output stays text-rendered
-// (MCP returns text content) but the wire shape is the structured
-// JSON the worker produces.
-
-registerTool(
-  'get_ai_ecosystem_today',
-  'One-shot composite AI morning brief. Calls /api/today which fans out across all daily TensorFeed feeds (news, 3 paper feeds, HF models/datasets/Spaces, hot GitHub issues, Reddit threads, OpenRouter catalog summary, provider status) and returns a single synthesized text response. Optional sections filter (any subset of news, papers, hf, community, inference, status) and limit_per_section (1-10, default 3). Captured-at timestamps from each underlying snapshot are surfaced so the agent knows recency. Free, no auth.',
-  {
-    sections: z.array(z.enum([
-      'news', 'papers', 'hf', 'community', 'inference', 'status',
-    ])).optional().describe('Which subsections to include (default: all six). "papers" covers all 3 paper feeds; "hf" covers models + datasets + spaces; "community" covers hot GitHub issues + Reddit threads; "inference" is the OpenRouter catalog summary.'),
-    limit_per_section: z.number().min(1).max(10).optional().describe('Max items per subsection (default 3, max 10). The output is intentionally terse so an agent can call this without burning context.'),
-  },
-  async ({ sections, limit_per_section }) => {
-    const params = new URLSearchParams();
-    if (sections && sections.length > 0) params.set('sections', sections.join(','));
-    if (typeof limit_per_section === 'number') params.set('limit', String(limit_per_section));
-    const path = `/today${params.toString() ? `?${params.toString()}` : ''}`;
-
-    type Section<T> = { available: boolean; captured_at?: string; data: T | null };
-    type NewsItem = { title: string; source: string; url: string; publishedAt: string };
-    type AIPaperItem = { title: string; authors: string[]; venue: string | null; citationCount: number; arxivId: string | null; url: string | null };
-    type ArxivItem = { arxivId: string; title: string; authors: string[]; primaryCategory: string | null; publishedAt: string; htmlUrl: string };
-    type HFDailyItem = { paperId: string; title: string; upvotes: number; num_comments: number; hf_url: string; arxiv_url: string | null; ai_keywords: string[] };
-    type HFModel = { id: string; downloads: number; likes: number; pipeline_tag: string | null };
-    type HFDataset = { id: string; downloads: number; likes: number };
-    type HFSpace = { id: string; sdk: string | null; likes: number; runtime_stage: string | null };
-    type GitHubIssue = { title: string; repo: string; comments: number; url: string };
-    type RedditPost = { subreddit: string; title: string; score: number; num_comments: number; permalink: string };
-
-    interface BriefShape {
-      generated_at: string;
-      news: Section<{ items: NewsItem[] }>;
-      papers: Section<{
-        ai_trending: Section<{ items: AIPaperItem[] }>;
-        arxiv_recent: Section<{ items: ArxivItem[] }>;
-        hf_daily: Section<{ items: HFDailyItem[] }>;
-      }>;
-      hf: Section<{ models: HFModel[]; datasets: HFDataset[]; spaces: HFSpace[] }>;
-      community: Section<{ github_issues: GitHubIssue[]; reddit: RedditPost[] }>;
-      inference: Section<{
-        total_models: number;
-        cheapest_input: { id: string; usd_per_million: number } | null;
-        largest_context: { id: string; tokens: number } | null;
-        free_tier_count: number;
-        top_namespaces: Array<{ namespace: string; count: number }>;
-      }>;
-      status: Section<{
-        all_operational: boolean;
-        service_count: number;
-        issues: Array<{ name: string; provider: string; status: string }>;
-      }>;
-    }
-
-    let brief: BriefShape;
-    try {
-      brief = (await fetchJSON(path)) as BriefShape;
-    } catch (err) {
-      return {
-        content: [{ type: 'text' as const, text: `Failed to fetch /api/today: ${(err as Error).message}` }],
-      };
-    }
-
-    const fmtCount = (x: number): string =>
-      x >= 1_000_000 ? `${(x / 1_000_000).toFixed(1)}M`
-        : x >= 1_000 ? `${(x / 1_000).toFixed(1)}K`
-          : String(x);
-
-    const sectionTexts: string[] = [];
-
-    if (brief.news.available && brief.news.data && brief.news.data.items.length > 0) {
-      const lines = brief.news.data.items.map((a, i) => `  ${i + 1}. ${a.title} (${a.source})\n     ${a.url}`).join('\n');
-      sectionTexts.push(`📰 NEWS\n${lines}`);
-    }
-
-    if (brief.papers.available && brief.papers.data) {
-      const bits: string[] = [];
-      const ai = brief.papers.data.ai_trending;
-      if (ai.available && ai.data && ai.data.items.length > 0) {
-        const lines = ai.data.items.map((p, i) => {
-          const authors = p.authors.slice(0, 2).join(', ') + (p.authors.length > 2 ? ' et al.' : '');
-          const venue = p.venue ? ` ${p.venue}.` : '';
-          return `    ${i + 1}. ${p.title}${venue} ${authors}. ${fmtCount(p.citationCount)} citations`;
-        }).join('\n');
-        bits.push(`  By citation count (Semantic Scholar):\n${lines}`);
-      }
-      const ax = brief.papers.data.arxiv_recent;
-      if (ax.available && ax.data && ax.data.items.length > 0) {
-        const lines = ax.data.items.map((p, i) => {
-          const date = p.publishedAt ? p.publishedAt.slice(0, 10) : '';
-          const authors = p.authors.slice(0, 2).join(', ') + (p.authors.length > 2 ? ' et al.' : '');
-          return `    ${i + 1}. ${p.title} (arXiv:${p.arxivId}, ${date}). ${authors}`;
-        }).join('\n');
-        bits.push(`  Just submitted (arXiv recent):\n${lines}`);
-      }
-      const hd = brief.papers.data.hf_daily;
-      if (hd.available && hd.data && hd.data.items.length > 0) {
-        const lines = hd.data.items.map((p, i) =>
-          `    ${i + 1}. ${p.title} (${p.upvotes} upvotes, ${p.num_comments} comments)`,
-        ).join('\n');
-        bits.push(`  HF editor picks today:\n${lines}`);
-      }
-      if (bits.length > 0) sectionTexts.push(`📄 PAPERS\n${bits.join('\n')}`);
-    }
-
-    if (brief.hf.available && brief.hf.data) {
-      const bits: string[] = [];
-      const { models, datasets, spaces } = brief.hf.data;
-      if (models.length > 0) {
-        bits.push(`  Models (top by downloads):\n` + models.map((x, i) => `    ${i + 1}. ${x.id} (${fmtCount(x.downloads)} downloads)`).join('\n'));
-      }
-      if (datasets.length > 0) {
-        bits.push(`  Datasets (top by downloads):\n` + datasets.map((x, i) => `    ${i + 1}. ${x.id} (${fmtCount(x.downloads)} downloads)`).join('\n'));
-      }
-      if (spaces.length > 0) {
-        bits.push(`  Spaces (top by likes):\n` + spaces.map((x, i) => `    ${i + 1}. ${x.id} (${fmtCount(x.likes)} likes)`).join('\n'));
-      }
-      if (bits.length > 0) sectionTexts.push(`🤗 HUGGING FACE\n${bits.join('\n')}`);
-    }
-
-    if (brief.community.available && brief.community.data) {
-      const bits: string[] = [];
-      const { github_issues, reddit } = brief.community.data;
-      if (github_issues.length > 0) {
-        const lines = github_issues.map((it, i) => `    ${i + 1}. ${it.repo}: ${it.title} (${it.comments} comments)\n       ${it.url}`).join('\n');
-        bits.push(`  GitHub hot issues:\n${lines}`);
-      }
-      if (reddit.length > 0) {
-        const lines = reddit.map((p, i) => `    ${i + 1}. r/${p.subreddit}: ${p.title} (${p.score} pts, ${p.num_comments} comments)\n       ${p.permalink}`).join('\n');
-        bits.push(`  Reddit hot threads:\n${lines}`);
-      }
-      if (bits.length > 0) sectionTexts.push(`💬 COMMUNITY\n${bits.join('\n')}`);
-    }
-
-    if (brief.inference.available && brief.inference.data) {
-      const d = brief.inference.data;
-      const lines: string[] = [];
-      lines.push(`  ${d.total_models} models across providers (OpenRouter)`);
-      if (d.cheapest_input) lines.push(`  Cheapest input: ${d.cheapest_input.id} at $${d.cheapest_input.usd_per_million.toFixed(2)}/Mtok`);
-      if (d.largest_context) lines.push(`  Largest context: ${d.largest_context.id} at ${fmtCount(d.largest_context.tokens)} tokens`);
-      lines.push(`  Free-tier models available: ${d.free_tier_count}`);
-      if (d.top_namespaces.length > 0) {
-        lines.push(`  Top namespaces: ${d.top_namespaces.map(n => `${n.namespace} (${n.count})`).join(', ')}`);
-      }
-      sectionTexts.push(`⚙️  INFERENCE CATALOG\n${lines.join('\n')}`);
-    }
-
-    if (brief.status.available && brief.status.data) {
-      const d = brief.status.data;
-      if (d.all_operational) {
-        sectionTexts.push(`✓  STATUS: all tracked AI providers operational (${d.service_count} services)`);
-      } else {
-        const lines = d.issues.map(s => `  ${s.name} (${s.provider}): ${s.status.toUpperCase()}`).join('\n');
-        sectionTexts.push(`⚠️  STATUS\n${lines}`);
-      }
-    }
-
-    if (sectionTexts.length === 0) {
-      return {
-        content: [
-          {
-            type: 'text' as const,
-            text: 'No data available yet. The daily snapshots have not run, or all upstream feeds errored. Try again in a few minutes.',
-          },
-        ],
-      };
-    }
-
-    const header = `TensorFeed AI ecosystem brief, generated ${brief.generated_at}`;
-    const body = sectionTexts.join('\n\n');
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: `${header}\n\n${body}\n\nFor any subsection, call the underlying tool directly: get_ai_news, get_ai_papers_trending, get_arxiv_recent, get_hf_daily_papers, get_hf_trending, get_hot_issues, get_reddit_trending, get_openrouter_models, get_ai_status.`,
-        },
-      ],
-    };
-  },
-);
-
-// ── Tool: get_ai_cves_latest ────────────────────────────────────────
-
-registerTool(
-  'get_ai_cves_latest',
-  'Get metadata for the most-recent AI-stack CVE batch plus the first 25 papers. Source: TensorFeed AI-CVE intelligence feed, derived from GitHub Security Advisories (CC BY 4.0). Each paper carries cve_ids, affected_products, affected_version_ranges, fixed_versions, exploited_in_wild, severity_label, and source_url. For the full set use get_ai_cves_feed with offset; for AI-stack-filtered + categorized + sorted papers use the paid /api/premium/ai-cves/* endpoints. Free, no auth.',
-  {},
-  async () => {
-    const data = (await fetchJSON('/ai-cves/latest')) as {
-      batch_id: string | null;
-      extracted_at: string | null;
-      total_papers: number;
-      ai_flagged_count: number;
-      papers: { cve_ids: string[]; affected_products: string[]; severity_label: string; exploited_in_wild: string; source_url: string }[];
-      source_license: string;
-      source_attribution: string;
-    };
-    if (!data.batch_id) {
-      return { content: [{ type: 'text' as const, text: 'No AI-CVE batch ingested yet. Check back once TensorFeed CC has POSTed the next clean batch from the extraction pipeline.' }] };
-    }
-    const head = `AI-CVE batch ${data.batch_id} extracted ${data.extracted_at}. Total ${data.total_papers} papers, ${data.ai_flagged_count} AI-flagged. License ${data.source_license} (${data.source_attribution}).`;
-    const lines = data.papers
-      .map((p, i) => {
-        const cves = p.cve_ids.length > 0 ? p.cve_ids.join(', ') : '(no CVE)';
-        const products = p.affected_products.slice(0, 3).join(', ');
-        return `${i + 1}. ${cves} | ${products} | sev=${p.severity_label} | exploited=${p.exploited_in_wild}\n   ${p.source_url}`;
-      })
-      .join('\n');
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: `${head}\n\nFirst 25 papers:\n${lines}\n\nFor AI-stack-filtered + categorized + sorted papers: /api/premium/ai-cves/ai-stack-cves (1 credit, x402-paid). For only papers actively exploited in the wild: /api/premium/ai-cves/exploited-in-wild (1 credit). For single-CVE lookup: /api/premium/ai-cves/cve?id=CVE-YYYY-NNNNN (1 credit).\n\nssvc_verdict gives the CISA SSVC act/attend/track decision for a CVE; stack_safety_verdict gates your deploy by package.`,
-        },
-      ],
-    };
-  },
-);
-
-// ── Tool: get_ai_cves_feed ──────────────────────────────────────────
-
-registerTool(
-  'get_ai_cves_feed',
-  'Get a paginated slice of the most-recent AI-stack CVE batch. limit is capped at 50 (the premium tier handles bulk). Source: TensorFeed AI-CVE feed, derived from GitHub Security Advisories (CC BY 4.0). Free, no auth.',
-  {
-    limit: z.number().min(1).max(50).optional().describe('Number of papers to return (default 25, max 50).'),
-    offset: z.number().min(0).optional().describe('Pagination offset (default 0).'),
-  },
-  async ({ limit, offset }) => {
-    const params = new URLSearchParams();
-    if (typeof limit === 'number') params.set('limit', String(limit));
-    if (typeof offset === 'number') params.set('offset', String(offset));
-    const path = `/ai-cves/feed${params.toString() ? `?${params.toString()}` : ''}`;
-    const data = (await fetchJSON(path)) as {
-      batch_id: string | null;
-      total: number;
-      limit: number;
-      offset: number;
-      papers: { cve_ids: string[]; affected_products: string[]; severity_label: string; exploited_in_wild: string; source_url: string }[];
-    };
-    if (!data.batch_id) {
-      return { content: [{ type: 'text' as const, text: 'No AI-CVE batch ingested yet.' }] };
-    }
-    const head = `AI-CVE feed batch ${data.batch_id}: showing offset ${data.offset} to ${data.offset + data.papers.length} of ${data.total} total.`;
-    const lines = data.papers
-      .map((p, i) => {
-        const cves = p.cve_ids.length > 0 ? p.cve_ids.join(', ') : '(no CVE)';
-        const products = p.affected_products.slice(0, 3).join(', ');
-        return `${i + 1}. ${cves} | ${products} | sev=${p.severity_label} | exploited=${p.exploited_in_wild}\n   ${p.source_url}`;
-      })
-      .join('\n');
-    return { content: [{ type: 'text' as const, text: `${head}\n\n${lines}` }] };
-  },
-);
-
-// ── Tool: get_ai_cves_stats ─────────────────────────────────────────
-
-registerTool(
-  'get_ai_cves_stats',
-  'Get aggregate counts across the most-recent AI-stack CVE batch: distribution by severity (critical/high/medium/low/unstated), distribution by exploitation status (stated_yes/stated_no/unstated), and top 10 vendors by frequency. Source: TensorFeed AI-CVE feed (GitHub Security Advisories, CC BY 4.0). Free, no auth.',
-  {},
-  async () => {
-    const data = (await fetchJSON('/ai-cves/stats')) as {
-      batch_id: string | null;
-      total_papers: number;
-      by_severity: Record<string, number>;
-      by_exploitation: Record<string, number>;
-      top_vendors: { vendor: string; count: number }[];
-    };
-    if (!data.batch_id) {
-      return { content: [{ type: 'text' as const, text: 'No AI-CVE batch ingested yet.' }] };
-    }
-    const sev = Object.entries(data.by_severity)
-      .map(([k, v]) => `  ${k}: ${v}`)
-      .join('\n');
-    const exp = Object.entries(data.by_exploitation)
-      .map(([k, v]) => `  ${k}: ${v}`)
-      .join('\n');
-    const vendors = data.top_vendors.map((v, i) => `  ${i + 1}. ${v.vendor}: ${v.count}`).join('\n');
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: `AI-CVE batch ${data.batch_id}: ${data.total_papers} total papers.\n\nBy severity:\n${sev}\n\nBy exploited-in-wild:\n${exp}\n\nTop vendors:\n${vendors}`,
-        },
-      ],
-    };
-  },
-);
-
-// ── Tool: get_ai_company_filings (free) ─────────────────────────────
-
-registerTool(
-  'get_ai_company_filings',
-  'Get recent SEC filings (10-K, 10-Q, 8-K, etc.) for one AI bellwether ticker. Cohort: NVDA, AMD, AVGO, TSM, ARM, MSFT, GOOGL, AMZN, ORCL, PLTR, SMCI, AAPL, META, TSLA. Source: data.sec.gov, public domain. Refreshed every 6 hours. Free, no auth.',
-  {
-    ticker: z.string().describe('AI bellwether ticker (case-insensitive). One of NVDA, AMD, AVGO, TSM, ARM, MSFT, GOOGL, AMZN, ORCL, PLTR, SMCI, AAPL, META, TSLA.'),
-    limit: z.number().min(1).max(50).optional().describe('Max filings to return (default 10, max 50).'),
-  },
-  async ({ ticker, limit }) => {
-    const params = new URLSearchParams({ ticker: ticker.toUpperCase() });
-    params.set('limit', String(limit ?? 10));
-    const data = (await fetchJSON(`/sec/filings/recent?${params}`)) as {
-      ok: boolean;
-      capturedAt?: string;
-      filings_count?: number;
-      filings?: { form: string; filing_date: string; primary_doc_description: string; primary_doc_url: string }[];
-    };
-    if (!data.ok || !data.filings || data.filings.length === 0) {
-      return {
-        content: [
-          {
-            type: 'text' as const,
-            text: `No filings returned for ${ticker.toUpperCase()}. The ticker may not be in the AI bellwether cohort; supported tickers: NVDA, AMD, AVGO, TSM, ARM, MSFT, GOOGL, AMZN, ORCL, PLTR, SMCI, AAPL, META, TSLA.`,
-          },
-        ],
-      };
-    }
-    const lines = data.filings
-      .map((f, i) => `${i + 1}. ${f.form} on ${f.filing_date}\n   ${f.primary_doc_description}\n   ${f.primary_doc_url}`)
-      .join('\n\n');
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: `${ticker.toUpperCase()} recent SEC filings (captured ${data.capturedAt ?? 'unknown'}, ${data.filings_count} returned):\n\n${lines}`,
-        },
-      ],
-    };
-  },
-);
-
-// ── Tool: premium_ai_company (1 credit) ─────────────────────────────
-
-registerTool(
-  'premium_ai_company',
-  'Get the per-ticker AI intelligence envelope for one AI bellwether: latest 10 SEC filings, latest 10 AI-tagged news mentions filtered by curated aliases, strategic and equity funding rounds where the company is a lead or notable investor, and cohort metadata. One call replaces four free siblings (sec/filings, news, funding, cohort) plus the agent-side alias filter. Costs 1 credit ($0.02). Strict-premium; ticker must be in the cohort.',
-  {
-    ticker: z
-      .string()
-      .regex(/^[A-Za-z.\-]{1,8}$/, 'ticker may only contain letters, dots, and hyphens (1 to 8 chars)')
-      .describe('AI bellwether ticker (case-insensitive). One of NVDA, AMD, AVGO, TSM, ARM, MSFT, GOOGL, AMZN, ORCL, PLTR, SMCI, AAPL, META, TSLA.'),
-  },
-  async ({ ticker }) => {
-    const upper = ticker.toUpperCase();
-    const data = (await fetchJSON(`/premium/ai-companies/${encodeURIComponent(upper)}`, { auth: true })) as {
-      ok: boolean;
-      capturedAt: string;
-      ticker: string;
-      company: { display_name: string; category: string; ai_angle: string; exchange: string; cik: string };
-      filings: { count: number; items: { form: string; filing_date: string; primary_doc_description: string; primary_doc_url: string }[] };
-      news: { count: number; items: { title: string; url: string; source: string; publishedAt: string; matched_aliases: string[] }[]; aliases_used: string[] };
-      funding_as_investor: { count: number; items: { company: string; stage: string; amountM: number; announcedDate: string }[] };
-      billing?: { credits_charged: number; credits_remaining?: number };
-    };
-    const filingsList = data.filings.items
-      .slice(0, 10)
-      .map((f, i) => `   ${i + 1}. ${f.form} on ${f.filing_date}: ${f.primary_doc_description}`)
-      .join('\n');
-    const newsList = data.news.items
-      .slice(0, 10)
-      .map((n, i) => `   ${i + 1}. ${n.title}\n      ${n.source} (${n.publishedAt})`)
-      .join('\n\n');
-    const fundingList = data.funding_as_investor.items
-      .map((r, i) => `   ${i + 1}. ${r.company} ${r.stage}, $${r.amountM}M, ${r.announcedDate}`)
-      .join('\n');
-    const billing = data.billing
-      ? `\n\nCharged ${data.billing.credits_charged} credit. Remaining: ${data.billing.credits_remaining ?? '?'}.`
-      : '';
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: `${data.ticker} (${data.company.display_name}, ${data.company.exchange}, ${data.company.category})\nAI angle: ${data.company.ai_angle}\nCaptured: ${data.capturedAt}\n\nRecent SEC filings (${data.filings.count}):\n${filingsList || '   none'}\n\nAI news mentions (${data.news.count}, aliases: ${data.news.aliases_used.join(', ')}):\n${newsList || '   none'}\n\nFunding rounds as lead or notable investor (${data.funding_as_investor.count}):\n${fundingList || '   none'}${billing}`,
-        },
-      ],
-    };
-  },
-);
-
-// ── Tool: get_x402_summary (free) ───────────────────────────────────
-
-registerTool(
-  'get_x402_summary',
-  'Get ecosystem-level x402 USDC settlement rollup on Base mainnet. Returns volume_usdc, count, unique_publishers, and change_vs_prior_window across a 24h, 7d, or 30d window. TensorFeed indexes Base USDC Transfer events filtered to wallets self-published by x402-compliant publishers in their /.well-known/x402.json manifests. Forward-only from 2026-05-28; ~6 min worst-case freshness (10 min SLA). Free, capped to one window per call.',
-  {
-    window: z.enum(['24h', '7d', '30d']).optional().describe('Aggregation window. Defaults to 24h if omitted.'),
-  },
-  async ({ window }) => {
-    const w = window ?? '24h';
-    const data = (await fetchJSON(`/x402-index/summary?window=${w}`)) as {
-      window: string;
-      captured_at: string;
-      volume_usdc: string;
-      count: number;
-      unique_publishers: number;
-      change_vs_prior_window: { volume_pct: number; count_pct: number };
-    };
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: `x402 settlement rollup (window ${data.window}, captured ${data.captured_at}):\n  volume_usdc: ${data.volume_usdc}\n  count: ${data.count}\n  unique_publishers: ${data.unique_publishers}\n  change vs prior window: volume ${data.change_vs_prior_window.volume_pct}%, count ${data.change_vs_prior_window.count_pct}%`,
-        },
-      ],
-    };
-  },
-);
-
-// ── Tool: get_x402_publishers (free) ────────────────────────────────
-
-registerTool(
-  'get_x402_publishers',
-  'List x402-compliant publishers TensorFeed currently indexes. Each entry: domain, pay_to_wallets, first_seen, last_crawled, last_event_at, last_crawl_error. Publishers are auto-discovered daily via /.well-known/x402.json crawls. Use this to enumerate which publishers can then be queried in depth via premium_x402_publisher_receipts. Free, no input.',
-  {},
-  async () => {
-    const data = (await fetchJSON('/x402-index/publishers')) as {
-      captured_at: string;
-      count: number;
-      publishers: {
-        domain: string;
-        pay_to_wallets: string[];
-        first_seen: string;
-        last_crawled?: string;
-        last_event_at?: string;
-        last_crawl_error?: string;
-      }[];
-    };
-    if (data.count === 0) {
-      return { content: [{ type: 'text' as const, text: 'No x402 publishers indexed yet.' }] };
-    }
-    // Cap the rendered list so a large index cannot flood the agent's
-    // context. Sanitize layer also enforces a hard char cap downstream.
-    const MAX_PUBLISHERS = 50;
-    const shown = data.publishers.slice(0, MAX_PUBLISHERS);
-    const lines = shown
-      .map(
-        (p, i) =>
-          `${i + 1}. ${p.domain}\n   wallets: ${p.pay_to_wallets.join(', ')}\n   first_seen: ${p.first_seen}${p.last_event_at ? `\n   last_event_at: ${p.last_event_at}` : ''}${p.last_crawled ? `\n   last_crawled: ${p.last_crawled}` : ''}${p.last_crawl_error ? `\n   last_crawl_error: ${p.last_crawl_error}` : ''}`,
-      )
-      .join('\n\n');
-    const more = data.count > shown.length ? `\n\n...and ${data.count - shown.length} more (showing first ${shown.length}).` : '';
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: `x402 publishers (${data.count}, captured ${data.captured_at}):\n\n${lines}${more}\n\nx402_publisher_verdict returns a signed trust verdict on one publisher before you pay it.`,
-        },
-      ],
-    };
-  },
-);
-
-// ── Tool: get_x402_leaderboard (free) ───────────────────────────────
-
-registerTool(
-  'get_x402_leaderboard',
-  'Top publishers by x402 USDC settlement volume across a 24h, 7d, or 30d window. Each leader: rank, domain, volume_usdc, count, share_pct of the sliced total. Limit clamped 1 to 25. Useful for surfacing which x402 services are receiving the most agent traffic. Free.',
-  {
-    window: z.enum(['24h', '7d', '30d']).optional().describe('Aggregation window. Defaults to 24h.'),
-    limit: z.number().min(1).max(25).optional().describe('Top N publishers to return. Default 10, max 25.'),
-  },
-  async ({ window, limit }) => {
-    const w = window ?? '24h';
-    const l = limit ?? 10;
-    const data = (await fetchJSON(`/x402-index/leaderboard?window=${w}&limit=${l}`)) as {
-      window: string;
-      captured_at: string;
-      leaders: { rank: number; domain: string; volume_usdc: string; count: number; share_pct: number }[];
-    };
-    if (data.leaders.length === 0) {
-      return { content: [{ type: 'text' as const, text: `No x402 leaders for window ${data.window}.` }] };
-    }
-    const lines = data.leaders
-      .map((e) => `  ${e.rank}. ${e.domain}: $${e.volume_usdc} across ${e.count} settlements (${e.share_pct}% share)`)
-      .join('\n');
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: `x402 leaderboard (window ${data.window}, captured ${data.captured_at}):\n${lines}`,
-        },
-      ],
-    };
-  },
-);
-
-// ── Tool: get_x402_recent (free) ────────────────────────────────────
-
-registerTool(
-  'get_x402_recent',
-  'Most recent x402 USDC settlement events newest-first. Each event: tx_hash, block, ts, from_address, to_address, amount_usdc, publisher_domain, base_explorer_url (basescan.org link). Backed by a 100-event ring buffer updated on every indexer cron tick. Limit clamped 1 to 50, default 20. Free.',
-  {
-    limit: z.number().min(1).max(50).optional().describe('Number of most-recent events. Default 20, max 50.'),
-  },
-  async ({ limit }) => {
-    const l = limit ?? 20;
-    const data = (await fetchJSON(`/x402-index/recent?limit=${l}`)) as {
-      captured_at: string;
-      count: number;
-      events: {
-        tx_hash: string;
-        block: number;
-        ts: string;
-        from_address: string;
-        to_address: string;
-        amount_usdc: string;
-        publisher_domain: string;
-        base_explorer_url: string;
-      }[];
-    };
-    if (data.count === 0) {
-      return { content: [{ type: 'text' as const, text: 'No recent x402 settlement events.' }] };
-    }
-    const lines = data.events
-      .map(
-        (e, i) =>
-          `${i + 1}. ${e.ts} block ${e.block}\n   ${e.publisher_domain}: $${e.amount_usdc} USDC\n   from ${e.from_address} to ${e.to_address}\n   ${e.base_explorer_url}`,
-      )
-      .join('\n\n');
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: `Recent x402 settlements (${data.count}, captured ${data.captured_at}):\n\n${lines}`,
-        },
-      ],
-    };
-  },
-);
-
-// ── Tool: premium_x402_publisher_receipts (1 credit) ────────────────
-
-registerTool(
-  'premium_x402_publisher_receipts',
-  'Per-publisher receipt feed for one x402-compliant domain across a from/to date range. Returns publisher meta (domain, pay_to_wallets, first_seen), window rollup (volume_usdc, count, avg_amount, daily_series), and attribution. \n\nVS FREE: get_x402_publishers tells you WHICH publishers exist but only with rolled-up scalar counters. This endpoint composes the per-day rollup across a date range with avg_amount, daily series for charts, and structured attribution license metadata in one paid call. An agent building a per-publisher analytics dashboard would otherwise need to call get_x402_publishers + reconstruct daily series from get_x402_summary per-day (impossible because /summary returns ecosystem totals not per-publisher) or wait for the next free-tier expansion. The premium endpoint saves the integration overhead and serves a forensic / compliance-grade payload for $0.02. \n\nForward-only index. Costs 1 credit ($0.02). Strict-premium; domain must exist in get_x402_publishers, otherwise 404.',
-  {
-    domain: z.string().describe('Publisher domain to query, e.g. tensorfeed.ai. Must exist in get_x402_publishers result.'),
-    from: z.string().describe('Inclusive start date YYYY-MM-DD.'),
-    to: z.string().describe('Inclusive end date YYYY-MM-DD.'),
-  },
-  async ({ domain, from, to }) => {
-    const params = new URLSearchParams({ from, to });
-    const data = (await fetchJSON(`/premium/x402-index/publisher/${encodeURIComponent(domain)}?${params}`, { auth: true })) as {
-      publisher: { domain: string; pay_to_wallets: string[]; first_seen: string };
-      window: { from: string; to: string; days: number };
-      rollup: {
-        volume_usdc: string;
-        count: number;
-        avg_amount: string;
-        daily_series: { date: string; volume_usdc: string; count: number }[];
-      };
-      attribution: string;
-      license: string;
-      billing?: { credits_charged: number; credits_remaining?: number };
-    };
-    const series = data.rollup.daily_series
-      .map((d) => `   ${d.date}: $${d.volume_usdc} across ${d.count}`)
-      .join('\n');
-    const billing = data.billing
-      ? `\n\nCharged ${data.billing.credits_charged} credit. Remaining: ${data.billing.credits_remaining ?? '?'}.`
-      : '';
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: `${data.publisher.domain} (first_seen ${data.publisher.first_seen})\nwallets: ${data.publisher.pay_to_wallets.join(', ')}\nwindow: ${data.window.from} to ${data.window.to} (${data.window.days} days)\n\nRollup:\n  volume_usdc: ${data.rollup.volume_usdc}\n  count: ${data.rollup.count}\n  avg_amount: ${data.rollup.avg_amount}\n\nDaily series:\n${series || '   none'}\n\nAttribution: ${data.attribution}\nLicense: ${data.license}${billing}`,
-        },
-      ],
-    };
-  },
-);
-
-// ── Tool: premium_x402_series (1 credit) ────────────────────────────
-
-registerTool(
-  'premium_x402_series',
-  'Time-series of ecosystem or per-publisher x402 settlement volume or count across a from/to date range, chart-feeding. Required: metric (volume or count), granularity (day or hour), from + to (YYYY-MM-DD). Optional: domain filter (omit for ecosystem). \n\nVS FREE: get_x402_summary returns one rolled-up scalar per call for a fixed window length (24h / 7d / 30d). For ANY chart or dashboard, the caller needs a series, not a scalar. The premium endpoint returns the full series in one call instead of N calls + N rate-limit budget burns. For a publisher-scoped series, it is the ONLY way to get per-publisher daily data (get_x402_summary is ecosystem-only). \n\nMVP supports granularity=day; hour returns an empty series with an attribution note (hourly rollups land in a future indexer version). Costs 1 credit ($0.02).',
-  {
-    metric: z.enum(['volume', 'count']).describe('Which series to return.'),
-    granularity: z.enum(['day', 'hour']).describe('Bucket size. MVP: day only; hour returns empty series.'),
-    from: z.string().describe('Inclusive start date YYYY-MM-DD.'),
-    to: z.string().describe('Inclusive end date YYYY-MM-DD.'),
-    domain: z.string().optional().describe('Optional publisher domain filter. Omit for ecosystem-wide series.'),
-  },
-  async ({ metric, granularity, from, to, domain }) => {
-    const params = new URLSearchParams({ metric, granularity, from, to });
-    if (domain) params.set('domain', domain);
-    const data = (await fetchJSON(`/premium/x402-index/series?${params}`, { auth: true })) as {
-      metric: string;
-      granularity: string;
-      window: { from: string; to: string };
-      series: { ts: string; value: string | number }[];
-      attribution: string;
-      billing?: { credits_charged: number; credits_remaining?: number };
-    };
-    const scope = domain ? `domain=${domain}` : 'ecosystem-wide';
-    const seriesLines = data.series.length
-      ? data.series.map((p) => `   ${p.ts}: ${p.value}`).join('\n')
-      : '   (empty)';
-    const billing = data.billing
-      ? `\n\nCharged ${data.billing.credits_charged} credit. Remaining: ${data.billing.credits_remaining ?? '?'}.`
-      : '';
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: `x402 ${data.metric} series (${data.granularity}, ${scope})\nwindow: ${data.window.from} to ${data.window.to}\n\nSeries:\n${seriesLines}\n\nAttribution: ${data.attribution}${billing}`,
-        },
-      ],
-    };
-  },
 );
 
 // ── Start ───────────────────────────────────────────────────────────

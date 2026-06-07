@@ -1,8 +1,8 @@
 {
   "name": "@tensorfeed/mcp-server",
-  "version": "1.39.0",
+  "version": "2.0.0",
   "mcpName": "ai.tensorfeed/mcp-server",
-  "description": "MCP server for TensorFeed.ai - AI news, status, model data, and premium endpoints (routing, cost projection, forecast, history series, news search, webhook watches with digest tier, enriched directory) for AI agents",
+  "description": "MCP server for TensorFeed.ai - AI news, service status, model pricing, signed decision verdicts, time series, model comparison, webhook watches, and a discovery tool for the full TensorFeed data catalog, for AI agents",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",
@@ -16,8 +16,9 @@
     "CHANGELOG.md"
   ],
   "scripts": {
-    "build": "tsc",
-    "start": "node dist/index.js"
+    "build": "tsc && node -e \"require('fs').copyFileSync('src/meta-snapshot.json','dist/meta-snapshot.json')\"",
+    "start": "node dist/index.js",
+    "test": "vitest run"
   },
   "keywords": [
     "mcp",
@@ -49,6 +50,7 @@
   },
   "devDependencies": {
     "@types/node": "^25.5.0",
-    "typescript": "^6.0.2"
+    "typescript": "^6.0.2",
+    "vitest": "^1.6.1"
   }
 }
