@@ -1638,7 +1638,7 @@ registerTool(
   'compare_models',
   'Pick between models in one call: pricing, benchmarks, status, and recent news for 2 to 5 models side by side, with cheapest-blended and per-benchmark rankings, so you choose without scraping each provider. Costs 1 credit ($0.02).',
   {
-    ids: z.string().describe('Comma-separated list of 2-5 model ids or display names. Examples: "Claude Opus 4.7,GPT-5.5,Gemini 3" or "opus-4-7,gpt-5-5"'),
+    ids: z.string().describe('Comma-separated list of 2-5 model ids or display names. Examples: "Claude Opus 4.8,GPT-5.5,Gemini 3.5 Flash" or "opus-4-8,gpt-5-5"'),
   },
   async ({ ids }) => {
     const data = (await fetchJSON(`/premium/compare/models?ids=${encodeURIComponent(ids)}`, { auth: true })) as {
