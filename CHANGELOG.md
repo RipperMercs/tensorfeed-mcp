@@ -2,6 +2,17 @@
 
 All notable changes to the [TensorFeed.ai MCP server](https://github.com/RipperMercs/tensorfeed-mcp). Free tools work without configuration; premium tools require a bearer token via the `TENSORFEED_TOKEN` env var. Buy credits at [tensorfeed.ai/developers/agent-payments](https://tensorfeed.ai/developers/agent-payments).
 
+## 2.0.1 - 2026-07-03
+
+Docs release, no code changes to the stdio server. The README now documents
+the hosted remote endpoint (https://mcp.tensorfeed.ai/mcp, 33-tool curated
+subset) and its wallet-native x402 payment surfaces: premium tools
+(route_verdict, whats_new) are payable per call with a funded USDC wallet
+(Base or Solana) via arguments.payment or an X-PAYMENT header, with strict
+HTTP-402 transport for auto-pay wrappers at
+https://mcp.tensorfeed.ai/mcp?x402=strict. No account, no signup, no API key.
+Bearer credits tokens keep working everywhere.
+
 ## 2.0.0 - 2026-06-07
 
 Major tool-surface rework. BREAKING: the catalog drops from about 78 tools to

@@ -3,7 +3,7 @@
   "name": "ai.tensorfeed/mcp-server",
   "title": "TensorFeed",
   "description": "AI news, model pricing, service status, and machine-payable premium tools. AFTA-certified.",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "websiteUrl": "https://tensorfeed.ai/developers/agent-payments",
   "repository": {
     "url": "https://github.com/RipperMercs/tensorfeed-mcp",
@@ -20,7 +20,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@tensorfeed/mcp-server",
-      "version": "2.0.0",
+      "version": "2.0.1",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"
@@ -37,8 +37,22 @@
   ],
   "_meta": {
     "io.modelcontextprotocol.registry/publisher-provided": {
-      "categories": ["news", "ai-models", "data", "payments"],
-      "tags": ["ai-news", "x402", "usdc", "base", "model-routing", "agent-payments", "machine-payable", "stablecoin"],
+      "categories": [
+        "news",
+        "ai-models",
+        "data",
+        "payments"
+      ],
+      "tags": [
+        "ai-news",
+        "x402",
+        "usdc",
+        "base",
+        "model-routing",
+        "agent-payments",
+        "machine-payable",
+        "stablecoin"
+      ],
       "license": "MIT",
       "premium": true,
       "premiumPaymentMethod": "USDC on Base mainnet",

@@ -1,6 +1,6 @@
 {
   "name": "@tensorfeed/mcp-server",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "mcpName": "ai.tensorfeed/mcp-server",
   "description": "MCP server for TensorFeed.ai - AI news, service status, model pricing, signed decision verdicts, time series, model comparison, webhook watches, and a discovery tool for the full TensorFeed data catalog, for AI agents",
   "main": "dist/index.js",
