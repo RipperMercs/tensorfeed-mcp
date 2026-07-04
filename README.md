@@ -6,7 +6,7 @@
 [![AFTA Certified](https://img.shields.io/badge/AFTA-Certified-7c3aed?style=flat-square)](https://tensorfeed.ai/agent-fair-trade)
 [![HF Dataset](https://img.shields.io/badge/HF-tensorfeed%2Fai--ecosystem--daily-yellow?style=flat-square)](https://huggingface.co/datasets/tensorfeed/ai-ecosystem-daily)
 
-The official [Model Context Protocol](https://modelcontextprotocol.io) server for [TensorFeed.ai](https://tensorfeed.ai). Plugs into Claude Desktop, Claude Code, Cursor, and any MCP-compatible client. Gives your agent real-time AI ecosystem data plus 14 premium tools paid in USDC on Base.
+The official [Model Context Protocol](https://modelcontextprotocol.io) server for [TensorFeed.ai](https://tensorfeed.ai). Plugs into Claude Desktop, Claude Code, Cursor, and any MCP-compatible client. Gives your agent real-time AI ecosystem data through 24 sharp tools: free data tools, eight signed verdict decisions with free previews, and premium tools paid per call in USDC on Base.
 
 ```jsonc
 // claude_desktop_config.json
@@ -36,43 +36,71 @@ Most AI agents have a knowledge cutoff in the past. This MCP server gives them a
 
 The premium tools are paid per call in USDC on Base. No subscription, no signup, no API key emails. Buy a few credits, get a bearer token, agent uses it. The whole thing is [Agent Fair-Trade Agreement](https://tensorfeed.ai/agent-fair-trade) certified: code-enforced no-charge on errors, breaker, schema-fail, and stale data; Ed25519-signed receipts on every paid call.
 
+## Hosted remote endpoint (no install)
+
+Prefer not to run a local process? The same TensorFeed data is served from a hosted Streamable HTTP MCP endpoint with a curated 33-tool subset (31 free + 2 premium), and its premium tools are payable per call with nothing but a funded USDC wallet: no account, no signup, no API key.
+
+| Surface | URL |
+| --- | --- |
+| Canonical endpoint | `https://mcp.tensorfeed.ai/mcp` |
+| Same endpoint, legacy path | `https://tensorfeed.ai/api/mcp` |
+| Strict x402 transport (for auto-pay wrappers) | `https://mcp.tensorfeed.ai/mcp?x402=strict` |
+
+```jsonc
+// Any MCP client with an HTTP transport
+{
+  "mcpServers": {
+    "tensorfeed": { "type": "http", "url": "https://mcp.tensorfeed.ai/mcp" }
+  }
+}
+```
+
+`GET` the endpoint for machine-readable discovery info. `POST` a JSON-RPC 2.0 envelope for `initialize`, `tools/list`, `tools/call`, and `ping`. The hosted catalog leans broader than this stdio package (SEC EDGAR full-text search, openFDA, EIA energy data, USGS earthquakes, NWS weather alerts, AI papers, agent-ecosystem scans).
+
+**Paying hosted premium tools with a wallet (x402):** `route_verdict` (the signed model-routing decision) and `whats_new` (the full AFTA-signed morning brief) cost 1 credit ($0.02 in USDC, Base or Solana) per call. Call the tool unpaid to receive the canonical x402 payment requirements (the `accepts` array), sign, and retry with the base64 payload in the `payment` argument, or send it as an `X-PAYMENT` header. x402 auto-pay client wrappers should use the strict URL: unpaid premium calls there return a real HTTP 402 with a `PAYMENT-REQUIRED` header, and settled responses carry a `PAYMENT-RESPONSE` header plus the AFTA-signed receipt. Bearer credits tokens work on the hosted endpoint too. No USDC yet? Free trial credits via a wallet signature at `https://tensorfeed.ai/api/payment/trial-credits`.
+
 ## Free tools
 
-No token required. Connect and use immediately.
+No token required for the data tools; the three account utilities are free but scoped to your token.
 
 | Tool | Description |
 |------|-------------|
-| `get_ai_news` | Latest AI news from 36+ sources, filterable by category |
-| `get_ai_status` | Real-time status of Claude, OpenAI, Gemini, Mistral, and more |
-| `is_service_down` | Check if a specific AI service is down |
-| `get_model_pricing` | Compare pricing across all major AI model providers |
-| `get_ai_today` | Summary of top AI stories from the last 24 hours |
-| `get_agent_activity` | Live AI bot traffic on TensorFeed.ai with top-bot breakdown |
-| `mcp_registry_snapshot` | Today's count + churn of the official MCP server registry |
-| `probe_latest` | Last 24h of measured LLM endpoint latency per provider (TTFB / total p50/p95/p99). Measured, not self-reported |
+| `get_ai_news` | Latest AI news from 15+ sources (Anthropic, OpenAI, Google, TechCrunch, arXiv, more) in one feed |
+| `find_tensorfeed_data` | Discovery tool: describe a data need in plain language, get the best matching TensorFeed endpoints |
+| `get_ai_status` | Real time operational status of major AI services (Claude, OpenAI, Gemini, Mistral, Cohere, more) |
+| `is_service_down` | Check whether one named AI service is operational, degraded, or down, with component detail |
+| `get_model_pricing` | Cross provider AI model pricing: input/output price per 1M tokens, context window, release date |
+| `account_status` | Your token's credit balance plus recent per endpoint usage (requires token, free) |
+| `list_watches` | List the active webhook watches owned by your token (requires token, free) |
+| `delete_watch` | Delete one of your webhook watches by id (requires token, free) |
 
-## Premium tools
+The rest of TensorFeed's 100+ endpoints stay reachable through `find_tensorfeed_data`, which returns the matching endpoint URLs your agent can call over plain HTTP.
 
-Set `TENSORFEED_TOKEN` to enable. Tools are 1 credit each ($0.02 at base rate, less with volume bundles). Watches are also 1 credit at registration; reads/lists/deletes are free for the owning token.
+## Premium and tiered tools
 
-| Tool | Description |
-|------|-------------|
-| `premium_routing` | Top-N ranked AI model recommendations for a task with full score breakdown |
-| `pricing_series` | Daily price points for one model with min/max/delta summary |
-| `benchmark_series` | Score evolution for a benchmark on one model |
-| `status_uptime` | Daily uptime % for one provider with incident-day list |
-| `premium_agents_directory` | Enriched agents catalog with live status, news, traffic, trending score |
-| `news_search` | Full-text news search with date/provider/category filters and relevance scoring |
-| `cost_projection` | Project workload cost across 1-10 AI models with 4 time horizons |
-| `provider_deepdive` | One provider's full profile: status, models, pricing, benchmarks, news |
-| `compare_models` | Side-by-side comparison of 2-5 models with normalized benchmarks |
-| `whats_new` | Agent morning brief: pricing changes, incidents, top news from last 1-7 days |
-| `mcp_registry_series` | Multi-day MCP registry growth and churn series, 90-day max range |
-| `probe_series` | Daily SLA series for one LLM provider, 90-day max range |
-| `create_price_watch` | Register a webhook watch on a model price change |
-| `create_status_watch` | Register a webhook watch on a service status transition |
-| `create_digest_watch` | Register a daily/weekly pricing-digest webhook |
-| `list_watches`, `delete_watch`, `get_account_balance`, `get_account_usage` | Free token-scoped utilities |
+Set `TENSORFEED_TOKEN` to enable paid calls. Two pricing mechanics, both visible in each tool's own description:
+
+- The **eight verdict tools** take a `tier` parameter: `tier="preview"` (default) is free at 10 calls per IP per day, `tier="full"` costs 1 credit ($0.02) and adds the full ranking plus an AFTA-signed receipt.
+- The **series tools** take a `days` parameter: days 1 to 7 are free, days 8 to 90 are paid.
+
+| Tool | Cost | Description |
+|------|------|-------------|
+| `route_verdict` | Preview free, full 1 credit | Signed best fit model decision fusing pricing, benchmarks, usage, latency, and incident state |
+| `provider_reliability_verdict` | Preview free, full 1 credit | Signed ruling on the most dependable and riskiest AI provider from TensorFeed's own latency probes |
+| `x402_settlement_verdict` | Preview free, full 1 credit | Signed verdict on x402 USDC settlement market momentum and concentration on Base |
+| `x402_publisher_verdict` | Preview free, full 1 credit | Signed trust verdict on one x402 publisher domain's settlement activity |
+| `stack_safety_verdict` | Preview free, full 1 credit | Deploy gate (BLOCK/HOLD/PASS/UNKNOWN) for an AI software stack against CVEs and CISA KEV |
+| `benchmark_trust_verdict` | Preview free, full 1 credit | Signed ruling on whether an AI benchmark is still trustworthy or saturated/contaminated |
+| `failover_verdict` | Preview free, full 1 credit | Signed ruling on the best operational provider to fail over to when one is degraded |
+| `ssvc_verdict` | Preview free, full 1 credit | Signed SSVC patch urgency decision for one CVE using the CISA SSVC decision tree |
+| `pricing_series` | Days 1-7 free, 8-90 1 credit | Daily price points for one AI model over a window, with min/max/delta summary |
+| `benchmark_series` | Days 1-7 free, 8-90 1 credit | Daily benchmark scores for one model and benchmark over a window |
+| `status_uptime` | Days 1-7 free, 8-90 1 credit | Daily uptime rollup for one provider with operational/degraded/down day counts |
+| `status_leaderboard` | Days 1-7 free, 8-90 3 credits | Cross provider uptime leaderboard ranked by uptime percent, from minute resolution counters |
+| `whats_new` | 1 credit | Everything that changed in AI recently: pricing moves, new models, incidents, top news |
+| `compare_models` | 1 credit | Side by side pricing, benchmarks, status, and news for 2 to 5 models with rankings |
+| `provider_deepdive` | 3 credits, strict premium | Everything about one AI provider: status, every model priced and benchmarked, news, traffic |
+| `create_watch` | 1 credit at registration | Register a webhook watch for a price change, status transition, digest, or rank threshold |
 
 Buy credits in USDC on Base at [tensorfeed.ai/developers/agent-payments](https://tensorfeed.ai/developers/agent-payments). Volume tiers: 10% off at $5, 25% off at $30, 40% off at $200. First payment from a new wallet gets a 50-credit welcome bonus.
 
