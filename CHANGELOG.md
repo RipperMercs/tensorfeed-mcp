@@ -2,6 +2,24 @@
 
 All notable changes to the [TensorFeed.ai MCP server](https://github.com/RipperMercs/tensorfeed-mcp). Free tools work without configuration; premium tools require a bearer token via the `TENSORFEED_TOKEN` env var. Buy credits at [tensorfeed.ai/developers/agent-payments](https://tensorfeed.ai/developers/agent-payments).
 
+## 2.0.3 - 2026-07-06
+
+Error-path and input hardening, completing the 2.0.2 output work.
+
+- Tool errors now pass through the same scrub as tool results. Previously a
+  thrown error's message (which can embed an upstream response body) went to
+  the host raw; every throw is now converted to a sanitized MCP tool error
+  with secrets redacted (the live bearer token, plus anything shaped like a
+  tf_live_ token), the standard control-char and role-token scrub applied,
+  and the text capped at 4k chars.
+- Upstream error bodies embedded in error messages are capped at 1.5k chars
+  at the source.
+- Every free-text tool parameter now carries a schema-level max length
+  (200 for identifiers, larger for comma lists, URLs, and search queries),
+  so oversized inputs are rejected by validation before reaching any code.
+
+No tool signatures change and no behavior changes for valid inputs.
+
 ## 2.0.2 - 2026-07-06
 
 Output hardening. Caller-supplied identifiers that a tool echoes back in its

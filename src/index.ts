@@ -7,7 +7,7 @@ import { z, ZodRawShape } from 'zod';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { sanitizeToolResponse, sanitizeForLLM, sanitizeReflectedValue } from './sanitize.js';
+import { sanitizeToolResponse, sanitizeForLLM, sanitizeReflectedValue, sanitizeErrorText } from './sanitize.js';
 
 const API_BASE = 'https://tensorfeed.ai/api';
 
@@ -83,19 +83,38 @@ async function fetchJSON(path: string, opts: FetchOptions = {}): Promise<unknown
     } catch {
       errPayload = await res.text().catch(() => '');
     }
+    // The upstream error body is untrusted input. Cap it here so a hostile
+    // or malfunctioning upstream (or a middlebox returning an HTML error
+    // page) cannot inflate the error message. The registerTool wrapper
+    // additionally runs the full error scrub before anything reaches the
+    // host LLM; this cap just bounds what gets embedded at the source.
+    const detail = errDetail(errPayload);
     if (res.status === 402) {
       throw new Error(
-        `Payment required (402). Your token may be out of credits. Top up at https://tensorfeed.ai/developers/agent-payments. Detail: ${JSON.stringify(errPayload)}`,
+        `Payment required (402). Your token may be out of credits. Top up at https://tensorfeed.ai/developers/agent-payments. Detail: ${detail}`,
       );
     }
     if (res.status === 401) {
       throw new Error(
-        `Token rejected (401). Check that TENSORFEED_TOKEN is set to a valid tf_live_... token. Detail: ${JSON.stringify(errPayload)}`,
+        `Token rejected (401). Check that TENSORFEED_TOKEN is set to a valid tf_live_... token. Detail: ${detail}`,
       );
     }
-    throw new Error(`API error ${res.status}: ${JSON.stringify(errPayload)}`);
+    throw new Error(`API error ${res.status}: ${detail}`);
   }
   return res.json();
+}
+
+// Stringify an upstream error payload for embedding in an Error message,
+// bounded so an oversized body cannot balloon the error text.
+const MAX_ERR_DETAIL_CHARS = 1500;
+function errDetail(payload: unknown): string {
+  let s: string;
+  try {
+    s = JSON.stringify(payload) ?? String(payload);
+  } catch {
+    s = String(payload);
+  }
+  return s.length > MAX_ERR_DETAIL_CHARS ? s.slice(0, MAX_ERR_DETAIL_CHARS) + '...' : s;
 }
 
 // ── Server setup ────────────────────────────────────────────────────
@@ -174,8 +193,24 @@ function registerTool<Args extends ZodRawShape>(
   const finalAnnotations: ToolAnnotations =
     annotations ?? (PAID_TOOL_RE.test(description) ? PREMIUM_READ_TOOL : READ_TOOL);
   const wrapped = (async (args: unknown, extra: unknown) => {
-    const result = await (cb as (a: unknown, e: unknown) => unknown)(args, extra);
-    return sanitizeToolResponse(result as Parameters<typeof sanitizeToolResponse>[0]);
+    try {
+      const result = await (cb as (a: unknown, e: unknown) => unknown)(args, extra);
+      return sanitizeToolResponse(result as Parameters<typeof sanitizeToolResponse>[0]);
+    } catch (err) {
+      // The error path used to bypass the sanitizer entirely: a thrown
+      // Error's message (which can embed an upstream response body via
+      // fetchJSON) went to the SDK raw. Convert every throw into a
+      // sanitized MCP tool error instead: secrets redacted (the live
+      // bearer token, plus anything token-shaped), the standard
+      // control-char and role-token scrub applied, and the text capped,
+      // so the error channel offers no unsanitized path into the host
+      // LLM's context.
+      const raw = err instanceof Error ? err.message : String(err);
+      return {
+        content: [{ type: 'text' as const, text: sanitizeErrorText(raw, [process.env.TENSORFEED_TOKEN]) }],
+        isError: true,
+      };
+    }
   }) as ToolCallback<Args>;
   // Direct dispatch to the SDK's underlying registration. Do not call
   // registerTool() here or it will recurse forever.
@@ -247,7 +282,7 @@ registerTool(
   'get_ai_news',
   'Get the latest AI news from TensorFeed.ai as a ranked list with title, source, URL, snippet, and publish time, filterable by category (e.g. "anthropic", "openai", "research", "tools"). Aggregates 15+ sources (Anthropic, OpenAI, Google, TechCrunch, The Verge, arXiv, and more) into one normalized feed, so an agent reads one schema instead of polling each outlet. Free, no auth.',
   {
-    category: z.string().optional().describe('Filter by category (e.g. "anthropic", "openai", "research", "tools")'),
+    category: z.string().max(100).optional().describe('Filter by category (e.g. "anthropic", "openai", "research", "tools")'),
     limit: z.number().min(1).max(50).optional().describe('Number of articles to return (default 10, max 50)'),
     digest: z.boolean().optional().describe('When true, return a headline-only digest (title, source, URL per story) instead of the full article set.'),
   },
@@ -293,7 +328,7 @@ registerTool(
   'find_tensorfeed_data',
   'Discover which TensorFeed endpoint answers a data need. Describe what you want in plain language (e.g. "trending AI papers", "is OpenAI down", "model price history") and this returns the 2 to 3 best-matching TensorFeed endpoints, each with its HTTP path, what it returns, and whether it is free or paid. TensorFeed exposes 100+ AI-ecosystem data and signed-verdict endpoints; the core ones are also dedicated tools, but the full catalog is reachable here and callable over HTTP (paid ones via x402 or a credits token). Free, no auth. Use this first when no dedicated tool obviously fits.',
   {
-    query: z.string().describe('Plain-language description of the data or decision you need.'),
+    query: z.string().max(500).describe('Plain-language description of the data or decision you need.'),
     limit: z.number().int().min(1).max(5).optional().describe('Max endpoints to return (default 3).'),
   },
   async ({ query, limit }) => {
@@ -346,7 +381,7 @@ registerTool(
   'is_service_down',
   'Check whether one named AI service (e.g. "claude", "openai", "gemini", "mistral", "cohere", "hugging face", "replicate") is currently operational, degraded, or down, with its component-level breakdown. Matches on service or provider name and lists available services if there is no match, so an agent can gate a call on live status before sending traffic. Free, no auth.',
   {
-    service: z.string().describe('Service name to check (e.g. "claude", "openai", "gemini", "mistral", "cohere", "hugging face", "replicate")'),
+    service: z.string().max(200).describe('Service name to check (e.g. "claude", "openai", "gemini", "mistral", "cohere", "hugging face", "replicate")'),
   },
   async ({ service }) => {
     const data = await fetchJSON('/status') as {
@@ -489,7 +524,7 @@ registerTool(
   {
     tier: z.enum(['preview', 'full']).optional().describe("'preview' (default, free) or 'full' (1 credit; adds runners-up, filters, signed receipt)."),
     task: z.enum(['code', 'reasoning', 'creative', 'general']).optional().describe('Task type to route for (code, reasoning, creative, general). Provide task or model.'),
-    model: z.string().optional().describe('Model id or display name to narrow the verdict to one model (e.g. "Claude Opus 4.7" or "claude-opus-4-7"). Provide task or model.'),
+    model: z.string().max(200).optional().describe('Model id or display name to narrow the verdict to one model (e.g. "Claude Opus 4.7" or "claude-opus-4-7"). Provide task or model.'),
     max_latency_p95_ms: z.number().optional().describe('Full tier only. Drop candidates whose measured p95 latency exceeds this value (ms).'),
     budget: z.number().optional().describe('Full tier only. Max blended USD per 1M tokens.'),
     min_quality: z.number().min(0).max(1).optional().describe('Full tier only. Minimum trust-discounted quality score in [0, 1].'),
@@ -823,7 +858,7 @@ registerTool(
   "TensorFeed's signed trust verdict on one x402 publisher, over its OWN on-chain settlement index: whether a named publisher domain is actively settling, recently quiet, registered with no settlement, unreachable, missing a Base payTo, or not indexed. Requires a domain. tier='preview' (default) is free (10 calls per day per IP), the trust verdict only. tier='full' costs 1 credit ($0.02), adds the 30-day settlement momentum, the shared-wallet risk flag, the settlement evidence (volume, count, last settled), and an AFTA-signed receipt, and needs a TENSORFEED_TOKEN. Get credits at tensorfeed.ai/developers/agent-payments.",
   {
     tier: z.enum(['preview', 'full']).optional().describe("'preview' (default, free) or 'full' (1 credit; adds momentum, shared-wallet flag, evidence, signed receipt)."),
-    domain: z.string().describe('Publisher domain to rule on, e.g. "x402.tavily.com". Required.'),
+    domain: z.string().max(253).describe('Publisher domain to rule on, e.g. "x402.tavily.com". Required.'),
   },
   async ({ tier, domain }) => {
     if (!domain || !domain.trim()) {
@@ -922,7 +957,7 @@ registerTool(
   "TensorFeed's deploy gate for an AI software stack: pass each package as comma-separated name@version and get the overall BLOCK / HOLD / PASS / UNKNOWN gate plus a per-package verdict, fusing the ingested AI-stack CVE batch with the CISA KEV catalog. Conservative by design: BLOCK only on an exploited CVE with no fix, HOLD when a known CVE applies and you must verify your version, PASS on no match, UNKNOWN outside the curated AI-stack cohort. tier='preview' (default) is free (10 calls per day per IP), caps at 3 packages, gate plus worst offender. tier='full' costs 1 credit ($0.02), raises the cap to 10 packages, adds the matched-CVE evidence (ids, affected ranges, fixed versions, KEV status) and an AFTA-signed receipt, and needs a TENSORFEED_TOKEN. Get credits at tensorfeed.ai/developers/agent-payments.",
   {
     tier: z.enum(['preview', 'full']).optional().describe("'preview' (default, free, caps at 3 packages) or 'full' (1 credit; up to 10 packages, matched-CVE evidence, signed receipt)."),
-    packages: z.string().describe('Comma-separated AI-stack packages as name@version (e.g. "vllm@0.5.0,transformers@4.40.0"). Required. Preview caps at 3, full up to 10.'),
+    packages: z.string().max(1000).describe('Comma-separated AI-stack packages as name@version (e.g. "vllm@0.5.0,transformers@4.40.0"). Required. Preview caps at 3, full up to 10.'),
   },
   async ({ tier, packages }) => {
     if (!packages || !packages.trim()) {
@@ -1016,8 +1051,8 @@ registerTool(
   "TensorFeed's signed ruling on whether an AI benchmark is still a trustworthy capability signal or saturated, contaminated, or near ceiling so a high score should be down-weighted: a trust band (reliable, use_with_caution, saturated, contaminated, deprecated) and a 0-100 trust score per benchmark. Pass benchmark to narrow to one, or category to filter, or neither for the registry. tier='preview' (default) is free (10 calls per day per IP), top verdict and bands only. tier='full' costs 1 credit ($0.02), adds the per-signal detail (ceiling proximity, frontier compression, contamination), a down-weight recommendation with an alternative benchmark, and an AFTA-signed receipt, and needs a TENSORFEED_TOKEN. Get credits at tensorfeed.ai/developers/agent-payments.",
   {
     tier: z.enum(['preview', 'full']).optional().describe("'preview' (default, free) or 'full' (1 credit; adds per-signal detail, recommendation, signed receipt)."),
-    benchmark: z.string().optional().describe('Benchmark registry id or name to narrow to one (e.g. "mmlu", "swe-bench"). Optional.'),
-    category: z.string().optional().describe('Category to filter the benchmarks (e.g. "coding", "reasoning"). Optional.'),
+    benchmark: z.string().max(200).optional().describe('Benchmark registry id or name to narrow to one (e.g. "mmlu", "swe-bench"). Optional.'),
+    category: z.string().max(100).optional().describe('Category to filter the benchmarks (e.g. "coding", "reasoning"). Optional.'),
   },
   async ({ tier, benchmark, category }) => {
     const params = new URLSearchParams();
@@ -1117,7 +1152,7 @@ registerTool(
   "Provider A is degraded; TensorFeed's signed ruling on the single best operational provider to fail over to for a task right now. Confirms A against the live incident-triage feed, then runs the route-verdict fusion with A (and any provider already in failover) excluded. Requires from. tier='preview' (default) is free (10 calls per day per IP), the failover target only. tier='full' costs 1 credit ($0.02), adds the full candidate (pricing, measured p95 latency, quality), the ranked alternatives, the confirmed incident on A, and an AFTA-signed receipt, and needs a TENSORFEED_TOKEN. Get credits at tensorfeed.ai/developers/agent-payments.",
   {
     tier: z.enum(['preview', 'full']).optional().describe("'preview' (default, free) or 'full' (1 credit; adds candidate detail, ranked alternatives, incident, signed receipt)."),
-    from: z.string().describe('The degraded provider to fail over FROM (e.g. "anthropic", "openai"). Required.'),
+    from: z.string().max(200).describe('The degraded provider to fail over FROM (e.g. "anthropic", "openai"). Required.'),
     task: z.enum(['code', 'reasoning', 'creative', 'general']).optional().describe('Task type to optimize the failover target for. Optional.'),
   },
   async ({ tier, from, task }) => {
@@ -1231,7 +1266,7 @@ registerTool(
   "TensorFeed's signed SSVC patch-urgency decision for one CVE, applying the CISA SSVC Coordinator decision tree to the recorded Vulnrichment decision points (exploitation, automatable, technical impact). Requires a CVE id. tier='preview' (default) is free (10 calls per day per IP): the three decision points and the decision-tree provenance, WITHOUT the computed Act / Attend / Track / Track* decision. tier='full' costs 1 credit ($0.02), adds the computed decision across the full low/medium/high Mission and Well-being envelope, the per-level reasoning, a live CISA KEV cross-check, and an AFTA-signed receipt, and needs a TENSORFEED_TOKEN. Get credits at tensorfeed.ai/developers/agent-payments.",
   {
     tier: z.enum(['preview', 'full']).optional().describe("'preview' (default, free) or 'full' (1 credit; adds the computed decision, envelope, reasoning, KEV cross-check, signed receipt)."),
-    cve: z.string().describe('CVE id to rule on, e.g. "CVE-2024-3094". Required.'),
+    cve: z.string().max(64).describe('CVE id to rule on, e.g. "CVE-2024-3094". Required.'),
   },
   async ({ tier, cve }) => {
     if (!cve || !cve.trim()) {
@@ -1318,7 +1353,7 @@ registerTool(
   'pricing_series',
   'Daily price points for one AI model over a window. days 1 to 7 is free; days 8 to 90 costs 1 credit ($0.02) and needs a TENSORFEED_TOKEN, adding the min/max/delta summary over the longer window. Get credits at tensorfeed.ai/developers/agent-payments.',
   {
-    model: z.string().describe('Model id or display name (e.g. "Claude Opus 4.7" or "claude-opus-4-7").'),
+    model: z.string().max(200).describe('Model id or display name (e.g. "Claude Opus 4.7" or "claude-opus-4-7").'),
     days: z.number().int().min(1).max(90).optional().describe('Window length (default 7). 1 to 7 free; 8 to 90 costs 1 credit.'),
   },
   async ({ model, days }) => {
@@ -1388,8 +1423,8 @@ registerTool(
   'benchmark_series',
   'Daily benchmark scores for one model+benchmark over a window. Benchmark keys: swe_bench, mmlu_pro, gpqa_diamond, math, human_eval. days 1 to 7 is free; days 8 to 90 costs 1 credit ($0.02) and needs a TENSORFEED_TOKEN, tracking score evolution over the longer window. Get credits at tensorfeed.ai/developers/agent-payments.',
   {
-    model: z.string().describe('Model id or display name.'),
-    benchmark: z.string().describe('Benchmark key (e.g. swe_bench, mmlu_pro, gpqa_diamond, math, human_eval).'),
+    model: z.string().max(200).describe('Model id or display name.'),
+    benchmark: z.string().max(200).describe('Benchmark key (e.g. swe_bench, mmlu_pro, gpqa_diamond, math, human_eval).'),
     days: z.number().int().min(1).max(90).optional().describe('Window length (default 7). 1 to 7 free; 8 to 90 costs 1 credit.'),
   },
   async ({ model, benchmark, days }) => {
@@ -1444,7 +1479,7 @@ registerTool(
   'status_uptime',
   'Daily uptime rollup for one provider over a window with operational/degraded/down day counts and uptime % (degraded counts as half-credit). days 1 to 7 is free; days 8 to 90 costs 1 credit ($0.02) and needs a TENSORFEED_TOKEN, adding per-incident-day detail over the longer window. Get credits at tensorfeed.ai/developers/agent-payments.',
   {
-    provider: z.string().describe('Provider name (e.g. anthropic, openai, google).'),
+    provider: z.string().max(200).describe('Provider name (e.g. anthropic, openai, google).'),
     days: z.number().int().min(1).max(90).optional().describe('Window length (default 7). 1 to 7 free; 8 to 90 costs 1 credit.'),
   },
   async ({ provider, days }) => {
@@ -1640,7 +1675,7 @@ registerTool(
   'compare_models',
   'Pick between models in one call: pricing, benchmarks, status, and recent news for 2 to 5 models side by side, with cheapest-blended and per-benchmark rankings, so you choose without scraping each provider. Costs 1 credit ($0.02).',
   {
-    ids: z.string().describe('Comma-separated list of 2-5 model ids or display names. Examples: "Claude Opus 4.8,GPT-5.5,Gemini 3.5 Flash" or "opus-4-8,gpt-5-5"'),
+    ids: z.string().max(500).describe('Comma-separated list of 2-5 model ids or display names. Examples: "Claude Opus 4.8,GPT-5.5,Gemini 3.5 Flash" or "opus-4-8,gpt-5-5"'),
   },
   async ({ ids }) => {
     const data = (await fetchJSON(`/premium/compare/models?ids=${encodeURIComponent(ids)}`, { auth: true })) as {
@@ -1688,7 +1723,7 @@ registerTool(
   'provider_deepdive',
   'Everything about one AI provider in a single call: live status, every model with pricing, tier, and benchmarks joined in, recent news, and agent traffic, replacing about four separate lookups. Costs 3 credits ($0.06). Strict premium, no free trial.',
   {
-    provider: z.string().describe('Provider id or display name (case-insensitive). Examples: anthropic, openai, google, mistral, cohere'),
+    provider: z.string().max(200).describe('Provider id or display name (case-insensitive). Examples: anthropic, openai, google, mistral, cohere'),
   },
   async ({ provider }) => {
     const data = (await fetchJSON(`/premium/providers/${encodeURIComponent(provider)}`, { auth: true })) as {
@@ -1774,12 +1809,12 @@ registerTool(
   'Register a webhook watch. type selects what to watch: "price" (a model price change), "status" (a service status transition), "digest" (a scheduled daily or weekly pricing summary), or "leaderboard_rank" (a provider crossing an uptime-rank threshold). Costs 1 credit ($0.02) at registration; the watch lives 90 days and each fire is an HMAC-signed POST to callback_url. Needs a TENSORFEED_TOKEN.',
   {
     type: z.enum(['price', 'status', 'digest', 'leaderboard_rank']).describe('What to watch.'),
-    callback_url: z.string().describe('HTTPS URL that receives the HMAC-signed POST when the watch fires.'),
-    secret: z.string().optional().describe('Optional shared secret used to HMAC-sign delivery bodies.'),
-    model: z.string().optional().describe('type=price only. Model name (e.g. "Claude Opus 4.7").'),
+    callback_url: z.string().max(2048).describe('HTTPS URL that receives the HMAC-signed POST when the watch fires.'),
+    secret: z.string().max(256).optional().describe('Optional shared secret used to HMAC-sign delivery bodies.'),
+    model: z.string().max(200).optional().describe('type=price only. Model name (e.g. "Claude Opus 4.7").'),
     field: z.enum(['inputPrice', 'outputPrice', 'blended']).optional().describe('type=price only. Which price field to watch.'),
     cadence: z.enum(['daily', 'weekly']).optional().describe('type=digest only. How often the digest fires.'),
-    provider: z.string().optional().describe('type=status or type=leaderboard_rank only. Provider name or slug (case-insensitive). e.g. anthropic, openai, gemini, bedrock, azure.'),
+    provider: z.string().max(200).optional().describe('type=status or type=leaderboard_rank only. Provider name or slug (case-insensitive). e.g. anthropic, openai, gemini, bedrock, azure.'),
     op: z
       .enum(['lt', 'gt', 'changes', 'becomes', 'drops_below', 'rises_above'])
       .optional()
