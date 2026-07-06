@@ -2,6 +2,16 @@
 
 All notable changes to the [TensorFeed.ai MCP server](https://github.com/RipperMercs/tensorfeed-mcp). Free tools work without configuration; premium tools require a bearer token via the `TENSORFEED_TOKEN` env var. Buy credits at [tensorfeed.ai/developers/agent-payments](https://tensorfeed.ai/developers/agent-payments).
 
+## 2.0.2 - 2026-07-06
+
+Output hardening. Caller-supplied identifiers that a tool echoes back in its
+own message (a service, model, provider, benchmark, publisher domain, CVE id,
+or search query that did not match) are now stripped of angle brackets and
+length-capped before they are placed in the response text. This is a
+defense-in-depth layer on top of the existing output sanitizer, so a value a
+caller passes in cannot be reflected back as markup. No tool signatures,
+endpoints, or behavior for valid inputs change.
+
 ## 2.0.1 - 2026-07-03
 
 Docs release, no code changes to the stdio server. The README now documents

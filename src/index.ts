@@ -7,7 +7,7 @@ import { z, ZodRawShape } from 'zod';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { sanitizeToolResponse, sanitizeForLLM } from './sanitize.js';
+import { sanitizeToolResponse, sanitizeForLLM, sanitizeReflectedValue } from './sanitize.js';
 
 const API_BASE = 'https://tensorfeed.ai/api';
 
@@ -309,10 +309,10 @@ registerTool(
     const rows = flattenCatalog(meta);
     const top = scoreEndpoints(rows, query, limit ?? 3);
     if (top.length === 0) {
-      return { content: [{ type: 'text' as const, text: `No TensorFeed endpoint matched "${query}". Browse the full catalog at https://tensorfeed.ai/api/meta or https://tensorfeed.ai/developers.` }] };
+      return { content: [{ type: 'text' as const, text: `No TensorFeed endpoint matched "${sanitizeReflectedValue(query)}". Browse the full catalog at https://tensorfeed.ai/api/meta or https://tensorfeed.ai/developers.` }] };
     }
     const lines = top.map((r) => `- ${r.path}\n  ${r.description}`).join('\n');
-    return { content: [{ type: 'text' as const, text: `Top TensorFeed endpoints for "${query}":\n${lines}\n\nCall free endpoints directly over HTTP. Paid endpoints (marked with a credit cost) accept x402 payment or a TENSORFEED_TOKEN bearer; see https://tensorfeed.ai/developers/agent-payments.` }] };
+    return { content: [{ type: 'text' as const, text: `Top TensorFeed endpoints for "${sanitizeReflectedValue(query)}":\n${lines}\n\nCall free endpoints directly over HTTP. Paid endpoints (marked with a credit cost) accept x402 payment or a TENSORFEED_TOKEN bearer; see https://tensorfeed.ai/developers/agent-payments.` }] };
   },
 );
 
@@ -359,7 +359,7 @@ registerTool(
     );
 
     if (!match) {
-      return { content: [{ type: 'text' as const, text: `Service "${service}" not found. Available services: ${data.services.map(s => s.name).join(', ')}` }] };
+      return { content: [{ type: 'text' as const, text: `Service "${sanitizeReflectedValue(service)}" not found. Available services: ${data.services.map(s => s.name).join(', ')}` }] };
     }
 
     const statusEmoji = match.status === 'operational' ? 'OK' : match.status === 'degraded' ? 'DEGRADED' : 'DOWN';
@@ -848,7 +848,7 @@ registerTool(
           {
             type: 'text' as const,
             text:
-              `x402 Publisher Verdict for ${data.domain}: ${data.verdict}\n` +
+              `x402 Publisher Verdict for ${sanitizeReflectedValue(data.domain)}: ${data.verdict}\n` +
               `Momentum: ${data.momentum}. Shared wallet: ${t.wallet_shared ? 'yes (risk flag)' : 'no'}` +
               (t.last_settled ? `. Last settled ${t.last_settled}` : '') +
               '\n' +
@@ -873,7 +873,7 @@ registerTool(
         {
           type: 'text' as const,
           text:
-            `x402 Publisher Verdict for ${data.domain}: ${data.verdict}\n` +
+            `x402 Publisher Verdict for ${sanitizeReflectedValue(data.domain)}: ${data.verdict}\n` +
             `Claim: ${data.claim}` +
             (data.captured_at ? `\nIndex captured ${data.captured_at}` : '') +
             '\n' +
@@ -1139,8 +1139,9 @@ registerTool(
         billing?: VerdictBilling;
       };
       const dest = data.failover_to;
+      const fromProvider = sanitizeReflectedValue(data.from.provider);
       const incidentLine = data.from.incident
-        ? `Incident on ${data.from.provider}: ${data.from.incident.title} (action ${data.from.incident.recommended_action})\n`
+        ? `Incident on ${fromProvider}: ${data.from.incident.title} (action ${data.from.incident.recommended_action})\n`
         : '';
       if (!dest) {
         return {
@@ -1148,7 +1149,7 @@ registerTool(
             {
               type: 'text' as const,
               text:
-                `Failover Verdict from ${data.from.provider}: no operational failover target found.\n` +
+                `Failover Verdict from ${fromProvider}: no operational failover target found.\n` +
                 incidentLine +
                 `Why: ${data.why}\nClaim: ${data.claim}` +
                 verdictBilling(data.billing),
@@ -1167,7 +1168,7 @@ registerTool(
           {
             type: 'text' as const,
             text:
-              `Failover Verdict from ${data.from.provider}: fail over to ${dest.model.name} (${dest.model.provider})\n` +
+              `Failover Verdict from ${fromProvider}: fail over to ${dest.model.name} (${dest.model.provider})\n` +
               `Why: ${dest.why}\n` +
               `Blended $${dest.pricing.blended}/1M, p95 ${dest.latency.measured_p95_ms ?? 'n/a'}ms, status ${dest.operational.status}\n` +
               incidentLine +
@@ -1190,6 +1191,7 @@ registerTool(
       rate_limit?: VerdictRateLimit;
     };
     const dest = data.failover_to;
+    const fromProvider = sanitizeReflectedValue(data.from.provider);
     const rl = previewRateLine(data.rate_limit);
     if (!dest) {
       return {
@@ -1197,7 +1199,7 @@ registerTool(
           {
             type: 'text' as const,
             text:
-              `Failover Verdict from ${data.from.provider}: no operational failover target found.\n` +
+              `Failover Verdict from ${fromProvider}: no operational failover target found.\n` +
               `Why: ${data.why}\n${data.claim}\n` +
               verdictUpsell('failover_verdict', 'the full failover candidate (pricing, measured latency, quality) and the ranked alternatives', rl),
           },
@@ -1209,7 +1211,7 @@ registerTool(
         {
           type: 'text' as const,
           text:
-            `Failover Verdict from ${data.from.provider}` +
+            `Failover Verdict from ${fromProvider}` +
             (data.from.in_incident ? ' (confirmed in incident)' : '') +
             `: fail over to ${dest.model.name} (${dest.model.provider})\n` +
             `Why: ${data.why}\n` +
@@ -1258,7 +1260,7 @@ registerTool(
           {
             type: 'text' as const,
             text:
-              `SSVC Verdict for ${data.cve}: ${data.decision_primary} (Mission and Well-being assumed medium)\n` +
+              `SSVC Verdict for ${sanitizeReflectedValue(data.cve)}: ${data.decision_primary} (Mission and Well-being assumed medium)\n` +
               `Envelope: low ${env.low}, medium ${env.medium}, high ${env.high}\n` +
               `Decision points: exploitation ${dp.exploitation}, automatable ${dp.automatable}, technical impact ${dp.technical_impact}\n` +
               `${kevLine}\n` +
@@ -1283,7 +1285,7 @@ registerTool(
         {
           type: 'text' as const,
           text:
-            `SSVC decision points for ${data.cve}:\n` +
+            `SSVC decision points for ${sanitizeReflectedValue(data.cve)}:\n` +
             `  exploitation: ${dp.exploitation}\n` +
             `  automatable: ${dp.automatable}\n` +
             `  technical impact: ${dp.technical_impact}\n` +
@@ -1346,7 +1348,7 @@ registerTool(
         content: [
           {
             type: 'text' as const,
-            text: `${data.model} (${data.provider ?? 'unknown'}) ${data.points.length} points\n${summary}\nCredits remaining: ${data.billing?.credits_remaining ?? '?'}`,
+            text: `${sanitizeReflectedValue(data.model)} (${sanitizeReflectedValue(data.provider ?? 'unknown')}) ${data.points.length} points\n${summary}\nCredits remaining: ${data.billing?.credits_remaining ?? '?'}`,
           },
         ],
       };
@@ -1373,7 +1375,7 @@ registerTool(
       content: [
         {
           type: 'text' as const,
-          text: `${data.model} (${data.provider ?? 'unknown'}) ${data.points.length} points over ${data.points.length} days\n${summary}\nFor up to 90 days, pass days 8 to 90 (1 credit).`,
+          text: `${sanitizeReflectedValue(data.model)} (${sanitizeReflectedValue(data.provider ?? 'unknown')}) ${data.points.length} points over ${data.points.length} days\n${summary}\nFor up to 90 days, pass days 8 to 90 (1 credit).`,
         },
       ],
     };
@@ -1409,7 +1411,7 @@ registerTool(
         content: [
           {
             type: 'text' as const,
-            text: `${data.model} on ${data.benchmark}: ${data.points.length} points\n${summary}\nCredits remaining: ${data.billing?.credits_remaining ?? '?'}`,
+            text: `${sanitizeReflectedValue(data.model)} on ${sanitizeReflectedValue(data.benchmark)}: ${data.points.length} points\n${summary}\nCredits remaining: ${data.billing?.credits_remaining ?? '?'}`,
           },
         ],
       };
@@ -1429,7 +1431,7 @@ registerTool(
       content: [
         {
           type: 'text' as const,
-          text: `${data.model} on ${data.benchmark}: ${data.points.length} points\n${summary}`,
+          text: `${sanitizeReflectedValue(data.model)} on ${sanitizeReflectedValue(data.benchmark)}: ${data.points.length} points\n${summary}`,
         },
       ],
     };
@@ -1468,7 +1470,7 @@ registerTool(
           {
             type: 'text' as const,
             text:
-              `${data.provider} uptime: ${data.uptime_pct ?? 'n/a'}% over ${data.days_with_data} measured days (of ${data.days_total} in range)\n` +
+              `${sanitizeReflectedValue(data.provider)} uptime: ${data.uptime_pct ?? 'n/a'}% over ${data.days_with_data} measured days (of ${data.days_total} in range)\n` +
               `  operational: ${data.days_operational}, degraded: ${data.days_degraded}, down: ${data.days_down}` +
               incidents +
               `\nCredits remaining: ${data.billing?.credits_remaining ?? '?'}`,
@@ -1489,7 +1491,7 @@ registerTool(
       content: [
         {
           type: 'text' as const,
-          text: `${data.provider} over ${data.days_total} days: ${data.uptime_pct ?? '?'}% uptime (${data.days_operational} operational, ${data.days_degraded} degraded, ${data.days_down} down)`,
+          text: `${sanitizeReflectedValue(data.provider)} over ${data.days_total} days: ${data.uptime_pct ?? '?'}% uptime (${data.days_operational} operational, ${data.days_degraded} degraded, ${data.days_down} down)`,
         },
       ],
     };
@@ -1656,7 +1658,7 @@ registerTool(
     };
 
     const lines = data.models.map(m => {
-      if (!m.matched) return `  ${m.query}: not found`;
+      if (!m.matched) return `  ${sanitizeReflectedValue(m.query)}: not found`;
       const benches = data.benchmark_keys
         .map(k => `${k}=${m.benchmarks[k] ?? '-'}`)
         .join(', ');
@@ -1875,10 +1877,11 @@ registerTool(
           watch: { id: string; expires_at: string };
           billing?: { credits_remaining?: number };
         };
+        const safeProvider = sanitizeReflectedValue(provider);
         const desc =
           op === 'changes'
-            ? `${provider} rank changes`
-            : `${provider} ${(op ?? '').replace('_', ' ')} #${threshold}`;
+            ? `${safeProvider} rank changes`
+            : `${safeProvider} ${(op ?? '').replace('_', ' ')} #${threshold}`;
         return {
           content: [
             {
