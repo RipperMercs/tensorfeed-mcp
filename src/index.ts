@@ -1537,9 +1537,9 @@ registerTool(
 
 registerTool(
   'status_leaderboard',
-  'Cross-provider uptime leaderboard ranked by uptime % DESC, computed from minute-resolution counters (~720 samples per provider per day). days 1 to 7 is free; days 8 to 90 costs 3 credits ($0.06) and needs a TENSORFEED_TOKEN, adding incident_count and mttr_minutes (mean time to recover) per provider over the longer window. Get credits at tensorfeed.ai/developers/agent-payments.',
+  'Cross-provider uptime leaderboard ranked by uptime % DESC, computed from minute-resolution counters (~720 samples per provider per day). days 1 to 7 is free; days 8 to 90 costs 5 credits ($0.10) and needs a TENSORFEED_TOKEN, adding incident_count and mttr_minutes (mean time to recover) per provider over the longer window. Get credits at tensorfeed.ai/developers/agent-payments.',
   {
-    days: z.number().int().min(1).max(90).optional().describe('Window length (default 7). 1 to 7 free; 8 to 90 costs 3 credits.'),
+    days: z.number().int().min(1).max(90).optional().describe('Window length (default 7). 1 to 7 free; 8 to 90 costs 5 credits.'),
   },
   async ({ days }) => {
     const d = days ?? 7;
@@ -1721,7 +1721,7 @@ registerTool(
 
 registerTool(
   'provider_deepdive',
-  'Everything about one AI provider in a single call: live status, every model with pricing, tier, and benchmarks joined in, recent news, and agent traffic, replacing about four separate lookups. Costs 3 credits ($0.06). Strict premium, no free trial.',
+  'Everything about one AI provider in a single call: live status, every model with pricing, tier, and benchmarks joined in, recent news, and agent traffic, replacing about four separate lookups. Costs 5 credits ($0.10). Strict premium, no free trial.',
   {
     provider: z.string().max(200).describe('Provider id or display name (case-insensitive). Examples: anthropic, openai, google, mistral, cohere'),
   },
