@@ -5,7 +5,7 @@ const CATALOG = {
   api: {
     getAiNews: '/api/news (free; latest AI news ranked list filterable by category)',
     pricingSeries: '/api/premium/history/pricing/series?model=&days= (1 credit; daily price points up to 90 days)',
-    redditTrending: '/api/reddit-trending (free; trending AI posts from key subreddits)',
+    hotIssues: '/api/issues/hot (free; trending AI discussion threads on GitHub issues)',
   },
 };
 
@@ -26,8 +26,8 @@ describe('flattenCatalog', () => {
 describe('scoreEndpoints', () => {
   it('ranks by keyword overlap and returns the top matches', () => {
     const rows = flattenCatalog(CATALOG);
-    const top = scoreEndpoints(rows, 'trending reddit posts', 3);
-    expect(top[0].key).toBe('redditTrending');
+    const top = scoreEndpoints(rows, 'trending github discussion threads', 3);
+    expect(top[0].key).toBe('hotIssues');
   });
   it('returns empty for no overlap', () => {
     const rows = flattenCatalog(CATALOG);
