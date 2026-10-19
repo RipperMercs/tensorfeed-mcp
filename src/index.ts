@@ -527,7 +527,7 @@ registerTool(
     model: z.string().max(200).optional().describe('Model id or display name to narrow the verdict to one model (e.g. "Claude Opus 5.5" or "claude-opus-5-5"). Provide task or model.'),
     max_latency_p95_ms: z.number().optional().describe('Full tier only. Drop candidates whose measured p95 latency exceeds this value (ms).'),
     budget: z.number().optional().describe('Full tier only. Max blended USD per 1M tokens.'),
-    min_quality: z.number().min(0).max(1).optional().describe('Full tier only. Minimum trust-discounted quality score in [0, 1].'),
+    min_quality: z.number().min(0).max(1).optional().describe('Full tier only. Minimum quality in [0, 1] as a share of the best candidate measured on the same benchmark set (0.9 keeps models within 10 percent of the top).'),
     require_operational: z.boolean().optional().describe('Full tier only. Default true. Set false to keep candidates known down or in failover.'),
     exclude_deprecated: z.boolean().optional().describe('Full tier only. Default true. Set false to keep deprecated or sunsetted models.'),
   },
