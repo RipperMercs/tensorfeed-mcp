@@ -2,6 +2,17 @@
 
 All notable changes to the [TensorFeed.ai MCP server](https://github.com/RipperMercs/tensorfeed-mcp). Free tools work without configuration; premium tools require a bearer token via the `TENSORFEED_TOKEN` env var. Buy credits at [tensorfeed.ai/developers/agent-payments](https://tensorfeed.ai/developers/agent-payments).
 
+## 2.0.5 - 2026-10-19
+
+Results now name the page they came from. A successful call to a tool whose
+data has a tensorfeed.ai page (news, status, model pricing, the verdicts, the
+pricing and benchmark series, compare_models) ends with a separate
+`Source: https://tensorfeed.ai/...` content item, so an assistant citing the
+answer can link a page a person can read. The data text itself is unchanged,
+including any signed payload; error results carry no Source line.
+
+No tool signatures change.
+
 ## 2.0.3 - 2026-07-06
 
 Error-path and input hardening, completing the 2.0.2 output work.

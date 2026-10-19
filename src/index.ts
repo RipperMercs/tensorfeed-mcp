@@ -8,6 +8,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { sanitizeToolResponse, sanitizeForLLM, sanitizeReflectedValue, sanitizeErrorText } from './sanitize.js';
+import { withSourceLine } from './pages.js';
 
 const API_BASE = 'https://tensorfeed.ai/api';
 
@@ -195,7 +196,7 @@ function registerTool<Args extends ZodRawShape>(
   const wrapped = (async (args: unknown, extra: unknown) => {
     try {
       const result = await (cb as (a: unknown, e: unknown) => unknown)(args, extra);
-      return sanitizeToolResponse(result as Parameters<typeof sanitizeToolResponse>[0]);
+      return sanitizeToolResponse(withSourceLine(name, result) as Parameters<typeof sanitizeToolResponse>[0]);
     } catch (err) {
       // The error path used to bypass the sanitizer entirely: a thrown
       // Error's message (which can embed an upstream response body via
