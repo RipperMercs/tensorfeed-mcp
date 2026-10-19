@@ -524,7 +524,7 @@ registerTool(
   {
     tier: z.enum(['preview', 'full']).optional().describe("'preview' (default, free) or 'full' (1 credit; adds runners-up, filters, signed receipt)."),
     task: z.enum(['code', 'reasoning', 'creative', 'general']).optional().describe('Task type to route for (code, reasoning, creative, general). Provide task or model.'),
-    model: z.string().max(200).optional().describe('Model id or display name to narrow the verdict to one model (e.g. "Claude Opus 4.7" or "claude-opus-4-7"). Provide task or model.'),
+    model: z.string().max(200).optional().describe('Model id or display name to narrow the verdict to one model (e.g. "Claude Opus 5.5" or "claude-opus-5-5"). Provide task or model.'),
     max_latency_p95_ms: z.number().optional().describe('Full tier only. Drop candidates whose measured p95 latency exceeds this value (ms).'),
     budget: z.number().optional().describe('Full tier only. Max blended USD per 1M tokens.'),
     min_quality: z.number().min(0).max(1).optional().describe('Full tier only. Minimum trust-discounted quality score in [0, 1].'),
@@ -1353,7 +1353,7 @@ registerTool(
   'pricing_series',
   'Daily price points for one AI model over a window. days 1 to 7 is free; days 8 to 90 costs 1 credit ($0.02) and needs a TENSORFEED_TOKEN, adding the min/max/delta summary over the longer window. Get credits at tensorfeed.ai/developers/agent-payments.',
   {
-    model: z.string().max(200).describe('Model id or display name (e.g. "Claude Opus 4.7" or "claude-opus-4-7").'),
+    model: z.string().max(200).describe('Model id or display name (e.g. "Claude Opus 5.5" or "claude-opus-5-5").'),
     days: z.number().int().min(1).max(90).optional().describe('Window length (default 7). 1 to 7 free; 8 to 90 costs 1 credit.'),
   },
   async ({ model, days }) => {
@@ -1675,7 +1675,7 @@ registerTool(
   'compare_models',
   'Pick between models in one call: pricing, benchmarks, status, and recent news for 2 to 5 models side by side, with cheapest-blended and per-benchmark rankings, so you choose without scraping each provider. Costs 1 credit ($0.02).',
   {
-    ids: z.string().max(500).describe('Comma-separated list of 2-5 model ids or display names. Examples: "Claude Opus 4.8,GPT-5.5,Gemini 3.5 Flash" or "opus-4-8,gpt-5-5"'),
+    ids: z.string().max(500).describe('Comma-separated list of 2-5 model ids or display names. Examples: "Claude Opus 5.5,GPT-6.1 Sol,Claude Haiku 5.5" or "opus-5-5,gpt-6-1-sol,haiku-5-5"'),
   },
   async ({ ids }) => {
     const data = (await fetchJSON(`/premium/compare/models?ids=${encodeURIComponent(ids)}`, { auth: true })) as {
@@ -1811,7 +1811,7 @@ registerTool(
     type: z.enum(['price', 'status', 'digest', 'leaderboard_rank']).describe('What to watch.'),
     callback_url: z.string().max(2048).describe('HTTPS URL that receives the HMAC-signed POST when the watch fires.'),
     secret: z.string().max(256).optional().describe('Optional shared secret used to HMAC-sign delivery bodies.'),
-    model: z.string().max(200).optional().describe('type=price only. Model name (e.g. "Claude Opus 4.7").'),
+    model: z.string().max(200).optional().describe('type=price only. Model name (e.g. "Claude Opus 5.5").'),
     field: z.enum(['inputPrice', 'outputPrice', 'blended']).optional().describe('type=price only. Which price field to watch.'),
     cadence: z.enum(['daily', 'weekly']).optional().describe('type=digest only. How often the digest fires.'),
     provider: z.string().max(200).optional().describe('type=status or type=leaderboard_rank only. Provider name or slug (case-insensitive). e.g. anthropic, openai, gemini, bedrock, azure.'),
