@@ -1,6 +1,6 @@
 {
   "name": "@tensorfeed/mcp-server",
-  "version": "2.0.5",
+  "version": "2.0.6",
   "mcpName": "ai.tensorfeed/mcp-server",
   "description": "MCP server for TensorFeed.ai - AI news, service status, model pricing, signed decision verdicts, time series, model comparison, webhook watches, and a discovery tool for the full TensorFeed data catalog, for AI agents",
   "main": "dist/index.js",
@@ -45,8 +45,8 @@
     "url": "https://github.com/RipperMercs/tensorfeed-mcp/issues"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.28.0",
-    "zod": "^4.3.6"
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",

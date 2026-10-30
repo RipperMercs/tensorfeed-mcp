@@ -2,6 +2,17 @@
 
 All notable changes to the [TensorFeed.ai MCP server](https://github.com/RipperMercs/tensorfeed-mcp). Free tools work without configuration; premium tools require a bearer token via the `TENSORFEED_TOKEN` env var. Buy credits at [tensorfeed.ai/developers/agent-payments](https://tensorfeed.ai/developers/agent-payments).
 
+## 2.0.6 - 2026-10-29
+
+Dependency floor raise. `@modelcontextprotocol/sdk` now requires 1.32.2 or
+later and `zod` 4.6.7 or later, so every install resolves past the published
+advisories in both (zod's memory exhaustion on oversized constrained
+collections, and the SDK's OAuth client and experimental tasks issues).
+`npm audit` on production dependencies reports zero. The server still runs
+over stdio only.
+
+No tool signatures change.
+
 ## 2.0.5 - 2026-10-19
 
 Results now name the page they came from. A successful call to a tool whose
